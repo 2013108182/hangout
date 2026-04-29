@@ -321,28 +321,41 @@ export default function App() {
     let hasError = false;
     const newErrors = { ...errors };
 
-    if (!voterName.trim()) { showToast('이름을 입력해주세요.'); newErrors.name = true; hasError = true; }
-    else newErrors.name = false;
+    // 이름 미입력 시 10x10 랜덤 조합 생성
+    let finalName = voterName.trim();
+    if (!finalName) {
+      const prefixes = ['신나는', '행복한', '즐거운', '배고픈', '활기찬', '조용한', '엉뚱한', '피곤한', '용감한', '심심한'];
+      const suffixes = ['고양이', '강아지', '토끼', '다람쥐', '펭귄', '호랑이', '사자', '곰', '여우', '알파카'];
+      finalName = `${prefixes[Math.floor(Math.random() * 10)]} ${suffixes[Math.floor(Math.random() * 10)]}`;
+    }
+    newErrors.name = false;
 
-    if (voterSelections.length === 0) { if(!hasError) showToast('가능한 날짜를 선택하세요.'); newErrors.selections = true; hasError = true; }
+    if (voterSelections.length === 0) { showToast('가능한 날짜를 선택하세요.'); newErrors.selections = true; hasError = true; }
     else newErrors.selections = false;
+
+    // 이름 중복 검사 (다른 기기에서 이미 사용 중인 이름인지 확인)
+    const isNameTaken = votes.some(v => v.name === finalName && v.uid !== user.uid);
+    if (isNameTaken) {
+      showToast('이미 사용 중인 이름입니다. 다른 이름을 입력해주세요.');
+      newErrors.name = true;
+      setErrors(newErrors);
+      return;
+    }
 
     setErrors(newErrors);
     if (hasError) return;
 
     try {
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetups', meetupId);
-      const newVoteData = { name: voterName.trim(), emoji: voterEmoji, available: voterSelections, uid: user.uid };
+      const newVoteData = { name: finalName, emoji: voterEmoji, available: voterSelections, uid: user.uid };
       
-      // 중복 이름 덮어쓰기 로직
-      const updatedVotes = [...votes.filter(v => v.name !== newVoteData.name), newVoteData];
+      // 기기 식별자(UID)를 기준으로 기존 본인의 투표를 갱신
+      const updatedVotes = [...votes.filter(v => v.uid !== user.uid), newVoteData];
       await updateDoc(docRef, { votes: updatedVotes });
       
-      setVoterName('');
-      setVoterSelections([]);
-      setVoterEmoji(emojis[Math.floor(Math.random() * emojis.length)]);
+      setVoterName(finalName); // 생성된 랜덤 이름을 입력창에도 반영
       setHasVoted(true); 
-      showToast('투표가 완료되었습니다!');
+      showToast('투표가 성공적으로 저장되었습니다.');
     } catch (err) {
       console.error(err);
       showToast('투표 저장에 실패했습니다.');
@@ -622,7 +635,7 @@ export default function App() {
                         </>
                       )}
                     </div>
-                    <input type="text" value={voterName} onChange={(e) => { setVoterName(e.target.value); if (errors.name) setErrors(prev => ({ ...prev, name: false })); }} placeholder="이름 입력" 
+                    <input type="text" value={voterName} onChange={(e) => { setVoterName(e.target.value); if (errors.name) setErrors(prev => ({ ...prev, name: false })); }} placeholder="이름 (미입력 시 랜덤)" 
                       className={`flex-1 px-3 py-2.5 bg-gray-50 rounded-lg text-sm font-bold outline-none border ${errors.name ? 'border-red-300 bg-red-50' : 'border-gray-100 focus:border-gray-900 focus:bg-white'}`}/>
                   </div>
 
