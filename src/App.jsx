@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Calendar, Users, ChevronLeft, ChevronRight, Copy, Check, CheckCircle2, Settings, Smile, AlertCircle, Sparkles, Lock, Clock, X, Loader2 } from 'lucide-react';
+import { Calendar, Users, ChevronLeft, ChevronRight, Copy, Check, CheckCircle2, Settings, Smile, AlertCircle, Sparkles, Lock, Clock, X, Loader2, Key } from 'lucide-react';
 
-// Firebase imports
+// Firebase 모듈
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 
-// 💡 [여기입니다!] 사용자님의 진짜 DB(Firebase) 주소를 적는 곳
+// 사용자 Firebase 설정값
 const myFirebaseConfig = {
   apiKey: "AIzaSyBkek39lk9xpxIKJFMKXUg3CmqYSpk27wY",
   authDomain: "hangout-planner-a4593.firebaseapp.com",
@@ -17,8 +17,7 @@ const myFirebaseConfig = {
   measurementId: "G-7DDY04HM2N"
 };
 
-// --- Firebase Init ---
-// 채팅창 가상 환경이면 가상 DB를, 배포 시엔 사용자님의 DB(myFirebaseConfig)를 사용합니다.
+// Firebase 초기화 (가상 환경 및 배포 환경 대응)
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : myFirebaseConfig;
 const app = firebaseConfig ? initializeApp(firebaseConfig) : null;
 const auth = app ? getAuth(app) : null;
@@ -26,11 +25,12 @@ const db = app ? getFirestore(app) : null;
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'meetup-app';
 
 export default function App() {
+  // 앱 전역 상태
   const [user, setUser] = useState(null);
   const [step, setStep] = useState('loading'); // 'loading', 'create', 'link', 'vote'
   const [meetupId, setMeetupId] = useState(null);
   
-  // 방장 설정 상태
+  // 모임 생성용 상태
   const [title, setTitle] = useState('');
   const [startDate, setStartDate] = useState(null);
   const [endDate, setEndDate] = useState(null);
@@ -39,7 +39,13 @@ export default function App() {
   const [specificDates, setSpecificDates] = useState([]);
   const [rules, setRules] = useState({ allowedDays: [], singleDayOnly: false, anonymous: false, hideResults: false });
   
-  // 뷰 및 투표 상태
+  // 보안 및 잠금 상태
+  const [roomPassword, setRoomPassword] = useState('');
+  const [dbPassword, setDbPassword] = useState('');
+  const [isLocked, setIsLocked] = useState(false);
+  const [inputPassword, setInputPassword] = useState('');
+
+  // 투표 진행용 상태
   const [viewingDate, setViewingDate] = useState(new Date());
   const [votes, setVotes] = useState([]); 
   const [voterName, setVoterName] = useState('');
@@ -47,10 +53,10 @@ export default function App() {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [voterSelections, setVoterSelections] = useState([]);
   
-  // 방장 여부 추적 (stale closure 없이 onSnapshot에서 안전하게 참조)
+  // 방장 생성 여부 확인용 Ref (Firestore 콜백 내 참조용)
   const isCreator = useRef(false);
 
-  // UI 상태
+  // UI 및 에러 상태
   const [copied, setCopied] = useState(false);
   const [hasVoted, setHasVoted] = useState(false);
   const [errors, setErrors] = useState({ title: false, dates: false, name: false, selections: false });
@@ -59,7 +65,7 @@ export default function App() {
   const emojis = ['😎', '🥳', '👽', '🤖', '👻', '😻', '🐶', '🦊', '🐻', '🐼', '🐰', '🐯', '🐸', '🦄', '🐙', '🦖'];
   const dayNames = ['일', '월', '화', '수', '목', '금', '토'];
 
-  // --- 1. 인증 및 URL 라우팅 ---
+  // 초기 인증 처리
   useEffect(() => {
     if (!auth) { setStep('create'); return; }
     
@@ -80,7 +86,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // URL 확인하여 투표 방인지 판단
+  // URL 쿼리 파라미터 파싱
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const id = params.get('id');
@@ -91,12 +97,13 @@ export default function App() {
     }
   }, []);
 
-  // --- 2. 실시간 데이터베이스 연동 ---
+  // Firestore 실시간 데이터 구독
   useEffect(() => {
     if (!user || !meetupId || !db) return;
 
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetups', meetupId);
-    // 방장(isCreator)이 아닐 때만 로딩 화면으로 전환 (방장은 link 화면을 유지해야 함)
+    
+    // 방장이 아닌 경우 로딩 화면 표시
     if (!isCreator.current) setStep('loading');
 
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
@@ -110,7 +117,14 @@ export default function App() {
         setSpecificDates(data.specificDates || []);
         setRules(data.rules || { allowedDays: [], singleDayOnly: false, anonymous: false, hideResults: false });
         setVotes(data.votes || []);
-        // ref로 방장 여부 확인 (stale closure 문제 없음)
+        setDbPassword(data.password || '');
+
+        // 방문자 접근 시 비밀번호 잠금 처리
+        if (data.password && !isCreator.current && inputPassword !== data.password) {
+          setIsLocked(true);
+        }
+
+        // 방장이면 링크 화면 유지, 일반 유저는 투표 화면 진입
         setStep(isCreator.current ? 'link' : 'vote');
         isCreator.current = false;
       } else {
@@ -126,7 +140,7 @@ export default function App() {
   }, [user, meetupId, db]);
 
 
-  // --- Helper Functions ---
+  // 유틸리티 함수
   const showToast = (message) => {
     setToast({ visible: true, message });
     setTimeout(() => setToast({ visible: false, message: '' }), 3000);
@@ -148,20 +162,22 @@ export default function App() {
     return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   };
 
+  // 투표 제한 조건 연산
   const todayStr = formatDate(new Date());
   const isExpired = deadline ? new Date() >= new Date(deadline) : false;
   const shouldHideResults = rules.hideResults && !hasVoted && !isExpired;
 
+  // 달력 렌더링 데이터 계산
   const year = viewingDate.getFullYear();
   const month = viewingDate.getMonth();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const firstDay = new Date(year, month, 1).getDay();
   const calendarDays = Array(firstDay).fill(null).concat(Array.from({length: daysInMonth}, (_, i) => new Date(year, month, i + 1)));
 
+  // 사용자 입력 핸들러
   const handlePrevMonth = () => setViewingDate(new Date(year, month - 1, 1));
   const handleNextMonth = () => setViewingDate(new Date(year, month + 1, 1));
 
-  // --- 이벤트 핸들러 ---
   const handleHostDateClick = (dateObj) => {
     if (!dateObj) return;
     const dateStr = formatDate(dateObj);
@@ -192,11 +208,11 @@ export default function App() {
     }
   };
 
-  // 💡 방 생성 로직 (DB 저장 & URL 파라미터 변경)
+  // 방 생성 및 Firestore 저장
   const handleCreateLink = async () => {
-    if (!db) return showToast("DB 설정이 필요합니다. 상단의 myFirebaseConfig를 입력해주세요!");
+    if (!db) return showToast("DB 설정이 필요합니다.");
 
-    // user가 없으면 익명 로그인 재시도 (페이지 첫 로드 시 auth가 늦게 완료될 수 있음)
+    // 사용자 인증 재확인
     let currentUser = user;
     if (!currentUser) {
       if (!auth) return showToast("Firebase Auth가 초기화되지 않았습니다.");
@@ -204,10 +220,11 @@ export default function App() {
         const cred = await signInAnonymously(auth);
         currentUser = cred.user;
       } catch (e) {
-        return showToast("Firebase Console → Authentication에서 '익명' 로그인을 활성화해주세요.");
+        return showToast("Firebase 설정에서 '익명' 로그인을 활성화해주세요.");
       }
     }
     
+    // 입력값 유효성 검사
     let hasError = false;
     const newErrors = { ...errors };
 
@@ -218,41 +235,65 @@ export default function App() {
     else if (dateMode === 'specific' && specificDates.length === 0) { if (!hasError) showToast('날짜를 1개 이상 선택해주세요.'); newErrors.dates = true; hasError = true; }
     else newErrors.dates = false;
 
+    if (deadline && new Date(deadline) <= new Date()) {
+      showToast('마감 기한은 현재 시간 이후여야 합니다.');
+      return;
+    }
+
+    if (roomPassword.trim()) {
+      const pwdLen = roomPassword.trim().length;
+      if (pwdLen < 4 || pwdLen > 12) {
+        showToast('비밀번호는 4~12자리로 설정해주세요.');
+        return;
+      }
+    }
+
     setErrors(newErrors);
     if (hasError) return;
 
-    // 클라우드 데이터베이스에 방 정보 저장
+    // 데이터 저장
     try {
       setStep('loading');
-      const newId = crypto.randomUUID().split('-')[0]; // 고유 짧은 ID 생성
+      const newId = crypto.randomUUID().split('-')[0];
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetups', newId);
 
-      // onSnapshot이 트리거되기 전에 방장 플래그 설정
+      // 구독 콜백 내 화면 전환 방지를 위한 방장 플래그
       isCreator.current = true;
 
       await setDoc(docRef, {
-        title, startDate, endDate, deadline, dateMode, specificDates, rules, votes: [], host: currentUser.uid, createdAt: new Date().toISOString()
+        title, 
+        startDate, 
+        endDate, 
+        deadline, 
+        dateMode, 
+        specificDates, 
+        rules, 
+        password: roomPassword.trim(),
+        votes: [], 
+        host: currentUser.uid, 
+        createdAt: new Date().toISOString()
       });
 
       setMeetupId(newId);
+      setInputPassword(roomPassword.trim());
 
-      // 화면 새로고침 없이 URL만 업데이트 (?id=xxx)
+      // 브라우저 URL 업데이트
       try {
         window.history.pushState({}, '', `?id=${newId}`);
       } catch (historyErr) {
-        console.warn("Canvas 등 제한된 iframe 환경에서는 URL pushState가 제한됩니다. 배포 환경에서는 정상 작동합니다.");
+        console.warn("URL pushState 오류", historyErr);
       }
     } catch (err) {
       isCreator.current = false;
       console.error(err);
-      showToast("방 생성에 실패했습니다. Firestore 보안 규칙을 확인해주세요.");
+      showToast("방 생성에 실패했습니다.");
       setStep('create');
     }
   };
 
   const handleCopyLink = () => {
     const el = document.createElement('textarea');
-    el.value = `${window.location.origin}${window.location.pathname}?id=${meetupId}`; // 사용자 실제 배포 URL을 동적으로 사용
+    el.value = `${window.location.origin}${window.location.pathname}?id=${meetupId}`; 
     document.body.appendChild(el);
     el.select();
     document.execCommand('copy');
@@ -261,7 +302,7 @@ export default function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // 💡 투표 로직 (DB 업데이트)
+  // 투표 데이터 Firestore 업데이트
   const handleSubmitVote = async () => {
     if (isExpired) return showToast('투표가 마감되었습니다.');
     if (!user || !db || !meetupId) return;
@@ -282,7 +323,7 @@ export default function App() {
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetups', meetupId);
       const newVoteData = { name: voterName.trim(), emoji: voterEmoji, available: voterSelections, uid: user.uid };
       
-      // 동일한 이름이 있으면 덮어씌우기
+      // 중복 이름 덮어쓰기 로직
       const updatedVotes = [...votes.filter(v => v.name !== newVoteData.name), newVoteData];
       await updateDoc(docRef, { votes: updatedVotes });
       
@@ -297,6 +338,17 @@ export default function App() {
     }
   };
 
+  // 방 입장 비밀번호 확인
+  const handleUnlock = () => {
+    if (inputPassword === dbPassword) {
+      setIsLocked(false);
+      showToast('잠금이 해제되었습니다.');
+    } else {
+      showToast('비밀번호가 틀렸습니다.');
+    }
+  };
+
+  // 집계 결과 계산
   const getResults = () => {
     const results = {};
     if (dateMode === 'range' && startDate && endDate) {
@@ -324,7 +376,7 @@ export default function App() {
   const results = getResults();
   const maxVotes = Math.max(...Object.values(results).map(arr => arr.length), 0);
 
-  // 로딩 화면
+  // 컴포넌트 렌더링 - 로딩 화면
   if (step === 'loading') {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center">
@@ -334,6 +386,7 @@ export default function App() {
     );
   }
 
+  // 메인 렌더링
   return (
     <div className="w-full h-[100dvh] overflow-y-auto bg-gray-50 text-gray-900 font-sans selection:bg-gray-900 selection:text-white relative">
       <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 transition-all duration-300 ease-out ${toast.visible ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-2 scale-95 pointer-events-none'}`}>
@@ -352,7 +405,7 @@ export default function App() {
           </div>
         )}
 
-        {/* --- STEP 1: 방장 모임 생성 --- */}
+        {/* 방장 모임 생성 화면 */}
         {step === 'create' && (
           <div className="bg-white p-5 sm:p-8 rounded-2xl shadow-sm border border-gray-200 max-w-xl mx-auto">
             <div className="space-y-6">
@@ -414,12 +467,23 @@ export default function App() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-gray-700 mb-1.5">마감 기한 (선택)</label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Clock className="w-4 h-4 text-gray-400" /></div>
-                  <input type="datetime-local" value={deadline} onChange={(e) => setDeadline(e.target.value)}
-                    className="w-full pl-10 pr-3 py-3 bg-gray-50 rounded-xl text-xs font-bold outline-none transition-all border border-transparent focus:border-gray-900 focus:bg-white text-gray-800"/>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1.5">마감 기한 (선택)</label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Clock className="w-4 h-4 text-gray-400" /></div>
+                    <input type="datetime-local" value={deadline} onChange={(e) => setDeadline(e.target.value)}
+                      className="w-full pl-10 pr-3 py-3 bg-gray-50 rounded-xl text-xs font-bold outline-none transition-all border border-transparent focus:border-gray-900 focus:bg-white text-gray-800"/>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1.5">비밀번호 설정 (선택)</label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Key className="w-4 h-4 text-gray-400" /></div>
+                    <input type="text" placeholder="4~12자리 (입력 시 자동 잠금)" value={roomPassword} onChange={(e) => setRoomPassword(e.target.value)} minLength={4} maxLength={12}
+                      className="w-full pl-10 pr-3 py-3 bg-gray-50 rounded-xl text-xs font-bold outline-none transition-all border border-transparent focus:border-gray-900 focus:bg-white text-gray-800"/>
+                  </div>
                 </div>
               </div>
 
@@ -453,7 +517,7 @@ export default function App() {
           </div>
         )}
 
-        {/* --- STEP 2: 링크 공유 --- */}
+        {/* 링크 공유 화면 */}
         {step === 'link' && (
           <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 max-w-sm mx-auto text-center mt-10">
             <div className="w-10 h-10 bg-gray-900 text-white rounded-lg flex items-center justify-center mx-auto mb-3">
@@ -475,8 +539,31 @@ export default function App() {
           </div>
         )}
 
-        {/* --- STEP 3: 멤버 투표 화면 --- */}
-        {step === 'vote' && (
+        {/* 비밀번호 잠금 화면 */}
+        {step === 'vote' && isLocked && (
+          <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-200 max-w-sm mx-auto text-center mt-10">
+            <div className="w-14 h-14 bg-gray-50 text-gray-900 rounded-2xl flex items-center justify-center mx-auto mb-5 border border-gray-100">
+              <Lock className="w-6 h-6" />
+            </div>
+            <h2 className="text-lg font-bold mb-2">비밀번호가 필요합니다</h2>
+            <p className="text-xs text-gray-500 mb-6">방장이 설정한 비밀번호를 입력해주세요.</p>
+            
+            <input 
+              type="password" 
+              value={inputPassword} 
+              onChange={(e) => setInputPassword(e.target.value)} 
+              onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
+              placeholder="비밀번호 입력" 
+              className="w-full px-4 py-3.5 bg-gray-50 rounded-xl text-sm font-bold outline-none border border-transparent focus:border-gray-900 focus:bg-white mb-4 text-center tracking-widest"
+            />
+            <button onClick={handleUnlock} className="w-full py-3.5 rounded-xl font-bold text-sm text-white bg-gray-900 hover:bg-gray-800 transition-colors">
+              입장하기
+            </button>
+          </div>
+        )}
+
+        {/* 멤버 투표 및 결과 화면 */}
+        {step === 'vote' && !isLocked && (
           <div className="grid md:grid-cols-12 gap-4 mt-2">
             
             <div className="md:col-span-7 space-y-3">
@@ -485,6 +572,7 @@ export default function App() {
                 <div className="flex flex-wrap gap-1.5">
                   <span className="text-[10px] text-gray-600 bg-gray-100 px-2 py-1 rounded-md font-bold">{dateMode === 'range' ? `${startDate} ~ ${endDate}` : `${specificDates.length}개 날짜`}</span>
                   {deadline && <span className="text-[10px] font-bold bg-orange-50 text-orange-600 px-2 py-1 rounded-md border border-orange-100 flex items-center gap-1"><Clock className="w-3 h-3"/> {formatDateTimeUI(deadline)} 마감</span>}
+                  {dbPassword && <span className="text-[10px] font-bold bg-gray-900 text-white px-2 py-1 rounded-md flex items-center gap-1"><Key className="w-3 h-3"/> 암호방</span>}
                   {rules.singleDayOnly && <span className="text-[10px] font-bold bg-red-50 text-red-600 px-2 py-1 rounded-md border border-red-100">1인1일</span>}
                   {rules.anonymous && <span className="text-[10px] font-bold bg-gray-50 text-gray-600 px-2 py-1 rounded-md border border-gray-200">익명</span>}
                   {rules.hideResults && <span className="text-[10px] font-bold bg-blue-50 text-blue-600 px-1 py-0.5 rounded border border-blue-100">블라인드</span>}
