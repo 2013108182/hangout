@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Users, ChevronLeft, ChevronRight, Copy, Check, CheckCircle2, Settings, Smile, AlertCircle, Sparkles, Lock } from 'lucide-react';
+import { Calendar, Users, ChevronLeft, ChevronRight, Copy, Check, CheckCircle2, Settings, Smile, AlertCircle, Sparkles, Lock, Clock } from 'lucide-react';
 
 export default function App() {
   const [step, setStep] = useState('create'); 
@@ -7,6 +7,8 @@ export default function App() {
   
   const [startDate, setStartDate] = useState(null);
   const [endDate, setEndDate] = useState(null);
+  const [deadline, setDeadline] = useState(''); // 투표 마감 기한 (YYYY-MM-DDTHH:mm)
+
   const [rules, setRules] = useState({
     allowedDays: [], 
     singleDayOnly: false,
@@ -44,7 +46,19 @@ export default function App() {
     return `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
   };
 
+  const formatDateTimeUI = (dateStr) => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    const m = d.getMonth() + 1;
+    const day = d.getDate();
+    const h = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    return `${m}/${day} ${h}:${min}`;
+  };
+
   const todayStr = formatDate(new Date());
+  const isExpired = deadline ? new Date() >= new Date(deadline) : false;
+  const shouldHideResults = rules.hideResults && !hasVoted && !isExpired;
 
   const year = viewingDate.getFullYear();
   const month = viewingDate.getMonth();
@@ -119,13 +133,17 @@ export default function App() {
     } else newErrors.title = false;
 
     if (!startDate || !endDate) {
-      if (!hasError) showToast('투표 기간을 선택해주세요.');
+      if (!hasError) showToast('약속 후보 날짜 범위를 선택해주세요.');
       newErrors.dates = true;
       hasError = true;
     } else newErrors.dates = false;
 
     setErrors(newErrors);
     if (hasError) return;
+
+    if (deadline && new Date(deadline) <= new Date()) {
+      return showToast('마감 기한은 현재 시간 이후로 설정해주세요.');
+    }
     
     if (rules.allowedDays.length > 0) {
       let hasValidDay = false;
@@ -158,6 +176,8 @@ export default function App() {
   };
 
   const handleSubmitVote = () => {
+    if (isExpired) return showToast('투표가 마감되었습니다.');
+
     let hasError = false;
     const newErrors = { ...errors };
 
@@ -219,10 +239,9 @@ export default function App() {
   const maxVotes = Math.max(...Object.values(results).map(arr => arr.length), 0);
 
   return (
-    // 💡 화면 전체 높이를 차지하고, 내부에서 스크롤되도록 수정 (모바일 스크롤 버그 해결)
     <div className="w-full h-[100dvh] overflow-y-auto bg-gray-50 text-gray-900 font-sans selection:bg-gray-900 selection:text-white relative">
       
-      {/* 💡 토스트 메시지 크기 및 여백 축소 */}
+      {/* 토스트 메시지 */}
       <div className={`fixed top-2 sm:top-4 left-1/2 -translate-x-1/2 z-50 transition-all duration-300 ease-out ${toast.visible ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-2 scale-95 pointer-events-none'}`}>
         <div className="bg-gray-900 text-white px-3 py-2 rounded-lg shadow-xl font-medium text-[11px] sm:text-xs flex items-center gap-1.5 whitespace-nowrap">
           <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
@@ -232,7 +251,7 @@ export default function App() {
 
       <div className="max-w-4xl mx-auto p-2 sm:p-4 pb-8 sm:pb-12">
         
-        {/* 헤더: 투표 화면에서는 공간 절약을 위해 숨김 처리 */}
+        {/* 헤더 */}
         {step !== 'vote' && (
           <div className="text-center mb-4 sm:mb-6 mt-2">
             <h1 className="text-lg sm:text-2xl font-bold tracking-tight mb-0.5">우리 언제 만나?</h1>
@@ -261,9 +280,9 @@ export default function App() {
                 />
               </div>
 
-              {/* 투표 기간 선택 */}
+              {/* 약속 후보 날짜 범위 */}
               <div>
-                <label className="block text-[11px] sm:text-xs font-bold text-gray-700 mb-1">투표 기간</label>
+                <label className="block text-[11px] sm:text-xs font-bold text-gray-700 mb-1">약속 후보 날짜 범위</label>
                 <div className={`bg-gray-50 rounded-lg sm:rounded-xl p-2 sm:p-4 transition-all border ${
                   errors.dates ? 'border-red-300' : 'border-transparent'
                 }`}>
@@ -312,6 +331,17 @@ export default function App() {
                     })}
                   </div>
                 </div>
+              </div>
+
+              {/* 투표 마감 기한 */}
+              <div>
+                <label className="block text-[11px] sm:text-xs font-bold text-gray-700 mb-1">투표 마감 기한 (선택)</label>
+                <input 
+                  type="datetime-local" 
+                  value={deadline}
+                  onChange={(e) => setDeadline(e.target.value)}
+                  className="w-full px-3 py-2 sm:py-2.5 bg-gray-50 rounded-lg text-xs sm:text-sm font-medium outline-none transition-all border border-transparent focus:border-gray-900 focus:bg-white"
+                />
               </div>
 
               {/* 투표 규칙 옵션 */}
@@ -395,7 +425,7 @@ export default function App() {
           </div>
         )}
 
-        {/* --- STEP 3: 멤버 투표 화면 (초밀도 레이아웃) --- */}
+        {/* --- STEP 3: 멤버 투표 화면 --- */}
         {step === 'vote' && (
           <div className="grid md:grid-cols-12 gap-2 sm:gap-4">
             
@@ -404,94 +434,105 @@ export default function App() {
               
               {/* 배너 */}
               <div className="bg-white p-2.5 sm:p-3 rounded-xl shadow-sm border border-gray-200 flex flex-wrap items-center justify-between gap-1.5">
-                <div className="flex items-center gap-2 min-w-0">
-                  <h2 className="text-sm font-bold text-gray-900 truncate max-w-[120px] sm:max-w-[200px]">{title}</h2>
-                  <span className="text-[9px] sm:text-[10px] text-gray-500 whitespace-nowrap bg-gray-100 px-1.5 py-0.5 rounded">{startDate} ~ {endDate}</span>
+                <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 min-w-0">
+                  <h2 className="text-sm font-bold text-gray-900 truncate max-w-[150px] sm:max-w-[200px]">{title}</h2>
+                  <span className="text-[9px] sm:text-[10px] text-gray-500 whitespace-nowrap bg-gray-100 px-1.5 py-0.5 rounded w-max">{startDate} ~ {endDate}</span>
                 </div>
-                <div className="flex gap-1 shrink-0">
+                <div className="flex flex-wrap justify-end gap-1 shrink-0">
+                  {deadline && <span className="text-[9px] bg-orange-50 text-orange-600 px-1 py-0.5 rounded border border-orange-100 flex items-center gap-0.5"><Clock className="w-2.5 h-2.5"/> {formatDateTimeUI(deadline)} 마감</span>}
                   {rules.singleDayOnly && <span className="text-[9px] bg-red-50 text-red-600 px-1 py-0.5 rounded border border-red-100">1인1일</span>}
                   {rules.anonymous && <span className="text-[9px] bg-gray-50 text-gray-600 px-1 py-0.5 rounded border border-gray-200">익명</span>}
                   {rules.hideResults && <span className="text-[9px] bg-blue-50 text-blue-600 px-1 py-0.5 rounded border border-blue-100">블라인드</span>}
                 </div>
               </div>
 
-              {/* 1. 프로필 */}
-              <div className="bg-white p-2.5 sm:p-3 rounded-xl shadow-sm border border-gray-200 flex items-center gap-2">
-                <div className="bg-gray-100 text-gray-500 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0">1</div>
-                <div className="relative shrink-0">
-                  <button onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="w-8 h-8 sm:w-9 sm:h-9 bg-gray-50 border border-gray-200 rounded-lg text-lg flex items-center justify-center">
-                    {voterEmoji}
-                  </button>
-                  {showEmojiPicker && (
-                    <>
-                      <div className="fixed inset-0 z-10" onClick={() => setShowEmojiPicker(false)}></div>
-                      <div className="absolute top-10 left-0 z-20 bg-white border border-gray-200 rounded-lg shadow-xl p-1.5 w-[200px] sm:w-[240px] grid grid-cols-6 gap-1">
-                        {emojis.map(e => <button key={e} onClick={() => { setVoterEmoji(e); setShowEmojiPicker(false); }} className="w-7 h-7 text-base hover:bg-gray-50 rounded-md">{e}</button>)}
-                      </div>
-                    </>
-                  )}
+              {isExpired ? (
+                <div className="bg-gray-50 p-6 rounded-xl border border-gray-200 text-center flex flex-col items-center justify-center min-h-[200px] sm:min-h-[250px]">
+                  <Clock className="w-8 h-8 text-gray-400 mb-2" />
+                  <p className="text-sm font-bold text-gray-700">투표가 마감되었습니다.</p>
+                  <p className="text-[10px] sm:text-xs text-gray-500 mt-1">설정된 기한이 지나 더 이상 참여할 수 없습니다.</p>
                 </div>
-                <input 
-                  type="text" 
-                  value={voterName}
-                  onChange={(e) => { setVoterName(e.target.value); if (errors.name) setErrors(prev => ({ ...prev, name: false })); }}
-                  placeholder="이름 입력" 
-                  className={`flex-1 px-3 py-1.5 sm:py-2 bg-gray-50 rounded-lg text-xs sm:text-sm font-medium outline-none border ${errors.name ? 'border-red-300 bg-red-50' : 'border-transparent focus:border-gray-900 focus:bg-white'}`}
-                />
-              </div>
-
-              {/* 2. 달력 */}
-              <div className={`bg-white p-2.5 sm:p-3 rounded-xl shadow-sm border ${errors.selections ? 'border-red-300' : 'border-gray-200'}`}>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-1.5">
-                    <div className="bg-gray-100 text-gray-500 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold">2</div>
-                    <span className="text-[11px] sm:text-xs font-bold text-gray-900">날짜 선택</span>
-                  </div>
-                  <div className="flex gap-0.5 bg-gray-50 rounded-md p-0.5 border border-gray-100">
-                     <button onClick={handlePrevMonth} className="p-1"><ChevronLeft className="w-3 h-3 text-gray-700"/></button>
-                     <div className="font-bold text-gray-900 px-1 flex items-center text-[10px] sm:text-[11px]">{month + 1}월</div>
-                     <button onClick={handleNextMonth} className="p-1"><ChevronRight className="w-3 h-3 text-gray-700"/></button>
-                  </div>
-                </div>
-                
-                <div className="grid grid-cols-7 gap-1 text-center mb-1">
-                  {dayNames.map((day, i) => <div key={day} className={`text-[9px] font-bold ${i === 0 ? 'text-red-500' : i === 6 ? 'text-blue-500' : 'text-gray-400'}`}>{day}</div>)}
-                </div>
-                
-                <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
-                  {calendarDays.map((dateObj, i) => {
-                    if (!dateObj) return <div key={`empty-${i}`} className="h-8 sm:h-10"></div>;
-                    
-                    const dateStr = formatDate(dateObj);
-                    const isVoteInRange = dateStr >= startDate && dateStr <= endDate;
-                    const isDayAllowed = rules.allowedDays.length === 0 || rules.allowedDays.includes(dateObj.getDay());
-                    const isSelectable = isVoteInRange && isDayAllowed;
-                    const isVotedByMe = voterSelections.includes(dateStr);
-                    const voteCount = results[dateStr] ? results[dateStr].length : 0;
-                    
-                    return (
-                      <button
-                        key={dateStr}
-                        disabled={!isSelectable}
-                        onClick={() => handleMemberDateClick(dateObj)}
-                        className={`h-8 sm:h-10 flex flex-col items-center justify-center rounded-lg transition-all border ${
-                          !isSelectable ? 'opacity-30 cursor-not-allowed bg-gray-50 border-transparent' :
-                          isVotedByMe ? 'bg-gray-900 text-white shadow-sm border-gray-900' : 
-                          'bg-white hover:border-gray-900 text-gray-900 border-gray-200'
-                        }`}
-                      >
-                        <span className="text-[11px] sm:text-xs font-bold">{dateObj.getDate()}</span>
-                        <div className="h-2.5 flex items-center">
-                          {voteCount > 0 && isSelectable && !rules.hideResults && (
-                            <span className={`text-[7px] font-bold px-1 py-px rounded ${isVotedByMe ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-600'}`}>{voteCount}</span>
-                          )}
-                        </div>
+              ) : (
+                <>
+                  {/* 1. 프로필 */}
+                  <div className="bg-white p-2.5 sm:p-3 rounded-xl shadow-sm border border-gray-200 flex items-center gap-2">
+                    <div className="bg-gray-100 text-gray-500 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0">1</div>
+                    <div className="relative shrink-0">
+                      <button onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="w-8 h-8 sm:w-9 sm:h-9 bg-gray-50 border border-gray-200 rounded-lg text-lg flex items-center justify-center">
+                        {voterEmoji}
                       </button>
-                    );
-                  })}
-                </div>
-                <button onClick={handleSubmitVote} className="w-full mt-2 sm:mt-3 py-2 rounded-lg font-bold text-xs sm:text-sm text-white bg-gray-900 hover:bg-gray-800">이 날짜로 제출</button>
-              </div>
+                      {showEmojiPicker && (
+                        <>
+                          <div className="fixed inset-0 z-10" onClick={() => setShowEmojiPicker(false)}></div>
+                          <div className="absolute top-10 left-0 z-20 bg-white border border-gray-200 rounded-lg shadow-xl p-1.5 w-[200px] sm:w-[240px] grid grid-cols-6 gap-1">
+                            {emojis.map(e => <button key={e} onClick={() => { setVoterEmoji(e); setShowEmojiPicker(false); }} className="w-7 h-7 text-base hover:bg-gray-50 rounded-md">{e}</button>)}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    <input 
+                      type="text" 
+                      value={voterName}
+                      onChange={(e) => { setVoterName(e.target.value); if (errors.name) setErrors(prev => ({ ...prev, name: false })); }}
+                      placeholder="이름 입력" 
+                      className={`flex-1 px-3 py-1.5 sm:py-2 bg-gray-50 rounded-lg text-xs sm:text-sm font-medium outline-none border ${errors.name ? 'border-red-300 bg-red-50' : 'border-transparent focus:border-gray-900 focus:bg-white'}`}
+                    />
+                  </div>
+
+                  {/* 2. 달력 */}
+                  <div className={`bg-white p-2.5 sm:p-3 rounded-xl shadow-sm border ${errors.selections ? 'border-red-300' : 'border-gray-200'}`}>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-1.5">
+                        <div className="bg-gray-100 text-gray-500 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold">2</div>
+                        <span className="text-[11px] sm:text-xs font-bold text-gray-900">날짜 선택</span>
+                      </div>
+                      <div className="flex gap-0.5 bg-gray-50 rounded-md p-0.5 border border-gray-100">
+                         <button onClick={handlePrevMonth} className="p-1"><ChevronLeft className="w-3 h-3 text-gray-700"/></button>
+                         <div className="font-bold text-gray-900 px-1 flex items-center text-[10px] sm:text-[11px]">{month + 1}월</div>
+                         <button onClick={handleNextMonth} className="p-1"><ChevronRight className="w-3 h-3 text-gray-700"/></button>
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-7 gap-1 text-center mb-1">
+                      {dayNames.map((day, i) => <div key={day} className={`text-[9px] font-bold ${i === 0 ? 'text-red-500' : i === 6 ? 'text-blue-500' : 'text-gray-400'}`}>{day}</div>)}
+                    </div>
+                    
+                    <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
+                      {calendarDays.map((dateObj, i) => {
+                        if (!dateObj) return <div key={`empty-${i}`} className="h-8 sm:h-10"></div>;
+                        
+                        const dateStr = formatDate(dateObj);
+                        const isVoteInRange = dateStr >= startDate && dateStr <= endDate;
+                        const isDayAllowed = rules.allowedDays.length === 0 || rules.allowedDays.includes(dateObj.getDay());
+                        const isSelectable = isVoteInRange && isDayAllowed;
+                        const isVotedByMe = voterSelections.includes(dateStr);
+                        const voteCount = results[dateStr] ? results[dateStr].length : 0;
+                        
+                        return (
+                          <button
+                            key={dateStr}
+                            disabled={!isSelectable}
+                            onClick={() => handleMemberDateClick(dateObj)}
+                            className={`h-8 sm:h-10 flex flex-col items-center justify-center rounded-lg transition-all border ${
+                              !isSelectable ? 'opacity-30 cursor-not-allowed bg-gray-50 border-transparent' :
+                              isVotedByMe ? 'bg-gray-900 text-white shadow-sm border-gray-900' : 
+                              'bg-white hover:border-gray-900 text-gray-900 border-gray-200'
+                            }`}
+                          >
+                            <span className="text-[11px] sm:text-xs font-bold">{dateObj.getDate()}</span>
+                            <div className="h-2.5 flex items-center">
+                              {voteCount > 0 && isSelectable && !rules.hideResults && (
+                                <span className={`text-[7px] font-bold px-1 py-px rounded ${isVotedByMe ? 'bg-gray-700 text-white' : 'bg-gray-100 text-gray-600'}`}>{voteCount}</span>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <button onClick={handleSubmitVote} className="w-full mt-2 sm:mt-3 py-2 rounded-lg font-bold text-xs sm:text-sm text-white bg-gray-900 hover:bg-gray-800">이 날짜로 제출</button>
+                  </div>
+                </>
+              )}
             </div>
 
             {/* 오른쪽: 결과 요약 */}
@@ -502,7 +543,7 @@ export default function App() {
                   <span className="text-[9px] sm:text-[10px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded font-bold">총 {votes.length}명 참여</span>
                 </div>
                 
-                {rules.hideResults && !hasVoted ? (
+                {shouldHideResults ? (
                   <div className="text-center py-6 bg-gray-50 rounded-lg border border-dashed border-gray-200">
                     <Lock className="w-4 h-4 mx-auto text-gray-400 mb-1" />
                     <p className="text-[10px] text-gray-500 font-medium">투표 완료 시 공개</p>
