@@ -53,8 +53,9 @@ export default function App() {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [voterSelections, setVoterSelections] = useState([]);
   
-  // 방장 생성 여부 확인용 Ref (Firestore 콜백 내 참조용)
+  // 상태 제어용 Ref
   const isCreator = useRef(false);
+  const hasLoadedMyVote = useRef(false); // 본인의 기존 투표 내역을 불러왔는지 확인
 
   // UI 및 에러 상태
   const [copied, setCopied] = useState(false);
@@ -103,7 +104,6 @@ export default function App() {
 
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetups', meetupId);
     
-    // 방장이 아닌 경우 로딩 화면 표시
     if (!isCreator.current) setStep('loading');
 
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
@@ -116,7 +116,9 @@ export default function App() {
         setDateMode(data.dateMode || 'range');
         setSpecificDates(data.specificDates || []);
         setRules(data.rules || { allowedDays: [], singleDayOnly: false, anonymous: false, hideResults: false });
-        setVotes(data.votes || []);
+        
+        const currentVotes = data.votes || [];
+        setVotes(currentVotes);
         setDbPassword(data.password || '');
 
         // 방문자 접근 시 비밀번호 잠금 처리
@@ -124,7 +126,18 @@ export default function App() {
           setIsLocked(true);
         }
 
-        // 방장이면 링크 화면 유지, 일반 유저는 투표 화면 진입
+        // 기존에 투표한 내역이 있다면 화면에 불러오기 (최초 1회)
+        if (!hasLoadedMyVote.current) {
+          const myPastVote = currentVotes.find(v => v.uid === user.uid);
+          if (myPastVote) {
+            setVoterName(myPastVote.name);
+            setVoterEmoji(myPastVote.emoji);
+            setVoterSelections(myPastVote.available);
+            setHasVoted(true);
+          }
+          hasLoadedMyVote.current = true;
+        }
+
         setStep(isCreator.current ? 'link' : 'vote');
         isCreator.current = false;
       } else {
@@ -212,7 +225,6 @@ export default function App() {
   const handleCreateLink = async () => {
     if (!db) return showToast("DB 설정이 필요합니다.");
 
-    // 사용자 인증 재확인
     let currentUser = user;
     if (!currentUser) {
       if (!auth) return showToast("Firebase Auth가 초기화되지 않았습니다.");
@@ -224,7 +236,6 @@ export default function App() {
       }
     }
     
-    // 입력값 유효성 검사
     let hasError = false;
     const newErrors = { ...errors };
 
@@ -251,7 +262,6 @@ export default function App() {
     setErrors(newErrors);
     if (hasError) return;
 
-    // 데이터 저장
     try {
       setStep('loading');
       const newId = crypto.randomUUID().split('-')[0];
@@ -259,6 +269,10 @@ export default function App() {
 
       // 구독 콜백 내 화면 전환 방지를 위한 방장 플래그
       isCreator.current = true;
+
+      // 30일 뒤 만료 시간 계산
+      const now = new Date();
+      const expireDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
       await setDoc(docRef, {
         title, 
@@ -271,7 +285,8 @@ export default function App() {
         password: roomPassword.trim(),
         votes: [], 
         host: currentUser.uid, 
-        createdAt: new Date().toISOString()
+        createdAt: now.toISOString(),
+        expiresAt: expireDate // 자동 삭제(TTL)를 위한 시간 데이터 추가
       });
 
       setMeetupId(newId);
@@ -316,6 +331,15 @@ export default function App() {
     if (voterSelections.length === 0) { if(!hasError) showToast('가능한 날짜를 선택하세요.'); newErrors.selections = true; hasError = true; }
     else newErrors.selections = false;
 
+    // 이름 중복 검사 (다른 기기에서 이미 사용 중인 이름인지 확인)
+    const isNameTaken = votes.some(v => v.name === voterName.trim() && v.uid !== user.uid);
+    if (isNameTaken) {
+      showToast('이미 사용 중인 이름입니다. 다른 이름을 입력해주세요.');
+      newErrors.name = true;
+      setErrors(newErrors);
+      return;
+    }
+
     setErrors(newErrors);
     if (hasError) return;
 
@@ -323,15 +347,12 @@ export default function App() {
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetups', meetupId);
       const newVoteData = { name: voterName.trim(), emoji: voterEmoji, available: voterSelections, uid: user.uid };
       
-      // 중복 이름 덮어쓰기 로직
-      const updatedVotes = [...votes.filter(v => v.name !== newVoteData.name), newVoteData];
+      // 기기 식별자(UID)를 기준으로 기존 본인의 투표를 갱신
+      const updatedVotes = [...votes.filter(v => v.uid !== user.uid), newVoteData];
       await updateDoc(docRef, { votes: updatedVotes });
       
-      setVoterName('');
-      setVoterSelections([]);
-      setVoterEmoji(emojis[Math.floor(Math.random() * emojis.length)]);
       setHasVoted(true); 
-      showToast('투표가 완료되었습니다!');
+      showToast('투표가 성공적으로 저장되었습니다.');
     } catch (err) {
       console.error(err);
       showToast('투표 저장에 실패했습니다.');
@@ -344,7 +365,7 @@ export default function App() {
       setIsLocked(false);
       showToast('잠금이 해제되었습니다.');
     } else {
-      showToast('비밀번호가 틀렸습니다.');
+      showToast('비밀번호가 일치하지 않습니다.');
     }
   };
 
@@ -411,7 +432,7 @@ export default function App() {
             <div className="space-y-6">
               <div>
                 <label className="block text-xs font-bold text-gray-700 mb-1.5">모임 이름</label>
-                <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="예) 강남역 저녁 모임 🍻" 
+                <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="예) 회식" 
                   className={`w-full px-4 py-3 bg-gray-50 rounded-xl text-sm font-medium outline-none border ${errors.title ? 'border-red-300 bg-red-50' : 'border-transparent focus:border-gray-900 focus:bg-white'}`}/>
               </div>
 
@@ -420,7 +441,7 @@ export default function App() {
                   <label className="block text-xs font-bold text-gray-700">약속 후보 날짜</label>
                   <div className="flex bg-gray-100 p-0.5 rounded-lg">
                     <button onClick={() => setDateMode('range')} className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-all ${dateMode === 'range' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>시작~종료</button>
-                    <button onClick={() => setDateMode('specific')} className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-all ${dateMode === 'specific' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>콕콕 찍기</button>
+                    <button onClick={() => setDateMode('specific')} className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-all ${dateMode === 'specific' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>개별 선택</button>
                   </div>
                 </div>
                 
