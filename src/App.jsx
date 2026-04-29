@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Users, ChevronLeft, ChevronRight, Copy, Check, Settings, Smile, AlertCircle, Sparkles, Lock } from 'lucide-react';
+import { Calendar, Users, ChevronLeft, ChevronRight, Copy, Check, CheckCircle2, Settings, Smile, AlertCircle, Sparkles, Lock } from 'lucide-react';
 
 export default function App() {
   const [step, setStep] = useState('create'); 
