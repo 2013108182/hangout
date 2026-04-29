@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Users, ChevronLeft, ChevronRight, Copy, Check, CheckCircle2, Settings, Smile, AlertCircle, Sparkles, Lock, Clock } from 'lucide-react';
+import { Calendar, Users, ChevronLeft, ChevronRight, Copy, Check, CheckCircle2, Settings, Smile, AlertCircle, Sparkles, Lock, Clock, X } from 'lucide-react';
 
 export default function App() {
   const [step, setStep] = useState('create'); 
@@ -8,6 +8,12 @@ export default function App() {
   const [startDate, setStartDate] = useState(null);
   const [endDate, setEndDate] = useState(null);
   const [deadline, setDeadline] = useState(''); // 투표 마감 기한 (YYYY-MM-DDTHH:mm)
+
+  // 💡 새롭게 추가된 날짜 선택 모드 및 다중 선택 상태
+  const [dateMode, setDateMode] = useState('range'); // 'range' | 'specific'
+  const [specificDates, setSpecificDates] = useState([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragAction, setDragAction] = useState(null); // 'select' | 'deselect'
 
   const [rules, setRules] = useState({
     allowedDays: [], 
@@ -84,6 +90,63 @@ export default function App() {
     });
   };
 
+  // 💡 특정 날짜 선택 / 드래그 관련 핸들러
+  const handleMouseDown = (dateObj) => {
+    if (!dateObj || dateMode !== 'specific') return;
+    const dateStr = formatDate(dateObj);
+    if (dateStr < todayStr) return;
+    
+    setIsDragging(true);
+    const isSelected = specificDates.includes(dateStr);
+    const action = isSelected ? 'deselect' : 'select';
+    setDragAction(action);
+    
+    setSpecificDates(prev => {
+      if(action === 'select' && !prev.includes(dateStr)) return [...prev, dateStr].sort();
+      if(action === 'deselect' && prev.includes(dateStr)) return prev.filter(d => d !== dateStr);
+      return prev;
+    });
+  };
+
+  const handleMouseEnter = (dateObj) => {
+    if (!isDragging || dateMode !== 'specific' || !dateObj) return;
+    const dateStr = formatDate(dateObj);
+    if (dateStr < todayStr) return;
+    
+    setSpecificDates(prev => {
+      if(dragAction === 'select' && !prev.includes(dateStr)) return [...prev, dateStr].sort();
+      if(dragAction === 'deselect' && prev.includes(dateStr)) return prev.filter(d => d !== dateStr);
+      return prev;
+    });
+  };
+
+  const handleTouchMove = (e) => {
+    if (!isDragging || dateMode !== 'specific') return;
+    const touch = e.touches[0];
+    const target = document.elementFromPoint(touch.clientX, touch.clientY);
+    const button = target?.closest('button');
+    if (button && button.dataset.date) {
+      const dateStr = button.dataset.date;
+      if (dateStr >= todayStr) {
+        setSpecificDates(prev => {
+          if(dragAction === 'select' && !prev.includes(dateStr)) return [...prev, dateStr].sort();
+          if(dragAction === 'deselect' && prev.includes(dateStr)) return prev.filter(d => d !== dateStr);
+          return prev;
+        });
+      }
+    }
+  };
+
+  useEffect(() => {
+    const handleMouseUp = () => setIsDragging(false);
+    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('touchend', handleMouseUp);
+    return () => {
+      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('touchend', handleMouseUp);
+    };
+  }, []);
+
   const handleHostDateClick = (dateObj) => {
     if (errors.dates) setErrors(prev => ({ ...prev, dates: false }));
     if (!dateObj) return;
@@ -108,7 +171,12 @@ export default function App() {
     if (!dateObj) return;
     const dateStr = formatDate(dateObj);
 
-    if (dateStr < startDate || dateStr > endDate) return;
+    // 💡 날짜 선택 모드에 따른 허용 여부 판별
+    const isVoteInRange = dateMode === 'range' 
+      ? (dateStr >= startDate && dateStr <= endDate)
+      : specificDates.includes(dateStr);
+
+    if (!isVoteInRange) return;
     if (rules.allowedDays.length > 0 && !rules.allowedDays.includes(dateObj.getDay())) return;
 
     if (rules.singleDayOnly) {
@@ -122,6 +190,18 @@ export default function App() {
     }
   };
 
+  // 마감 기한 프리셋 헬퍼 함수
+  const handlePresetDeadline = (daysToAdd, setEndOfDay = false) => {
+    const d = new Date();
+    d.setDate(d.getDate() + daysToAdd);
+    if (setEndOfDay) {
+      d.setHours(23, 59, 0, 0);
+    }
+    const pad = (n) => String(n).padStart(2, '0');
+    const formatted = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    setDeadline(formatted);
+  };
+
   const handleCreateLink = () => {
     let hasError = false;
     const newErrors = { ...errors };
@@ -132,8 +212,13 @@ export default function App() {
       hasError = true;
     } else newErrors.title = false;
 
-    if (!startDate || !endDate) {
+    // 💡 모드에 따른 유효성 검사
+    if (dateMode === 'range' && (!startDate || !endDate)) {
       if (!hasError) showToast('약속 후보 날짜 범위를 선택해주세요.');
+      newErrors.dates = true;
+      hasError = true;
+    } else if (dateMode === 'specific' && specificDates.length === 0) {
+      if (!hasError) showToast('후보 날짜를 1개 이상 선택해주세요.');
       newErrors.dates = true;
       hasError = true;
     } else newErrors.dates = false;
@@ -147,20 +232,27 @@ export default function App() {
     
     if (rules.allowedDays.length > 0) {
       let hasValidDay = false;
-      let curr = parseDate(startDate);
-      const end = parseDate(endDate);
-      while (curr <= end) {
-        if (rules.allowedDays.includes(curr.getDay())) {
-          hasValidDay = true;
-          break;
+      if (dateMode === 'range') {
+        let curr = parseDate(startDate);
+        const end = parseDate(endDate);
+        while (curr <= end) {
+          if (rules.allowedDays.includes(curr.getDay())) {
+            hasValidDay = true;
+            break;
+          }
+          curr.setDate(curr.getDate() + 1);
         }
-        curr.setDate(curr.getDate() + 1);
+      } else {
+        hasValidDay = specificDates.some(date => {
+          const d = parseDate(date);
+          return rules.allowedDays.includes(d.getDay());
+        });
       }
       if (!hasValidDay) return showToast('설정 기간 내 허용된 요일이 없습니다.');
     }
 
     setStep('link');
-    setViewingDate(parseDate(startDate));
+    setViewingDate(parseDate(dateMode === 'range' ? startDate : specificDates[0]));
   };
 
   const handleCopyLink = () => {
@@ -215,7 +307,9 @@ export default function App() {
 
   const getResults = () => {
     const results = {};
-    if (startDate && endDate) {
+    
+    // 💡 모드에 따른 결과 초기화
+    if (dateMode === 'range' && startDate && endDate) {
       let curr = parseDate(startDate);
       const end = parseDate(endDate);
       while(curr <= end) {
@@ -224,6 +318,13 @@ export default function App() {
         }
         curr.setDate(curr.getDate() + 1);
       }
+    } else if (dateMode === 'specific') {
+      specificDates.forEach(date => {
+        const d = parseDate(date);
+        if (rules.allowedDays.length === 0 || rules.allowedDays.includes(d.getDay())) {
+          results[date] = [];
+        }
+      });
     }
     
     votes.forEach(vote => {
@@ -262,10 +363,10 @@ export default function App() {
         {/* --- STEP 1: 방장 모임 생성 --- */}
         {step === 'create' && (
           <div className="bg-white p-3 sm:p-6 rounded-xl sm:rounded-2xl shadow-sm border border-gray-200 max-w-xl mx-auto">
-            <div className="space-y-3 sm:space-y-5">
+            <div className="space-y-4 sm:space-y-6">
               {/* 모임 이름 */}
               <div>
-                <label className="block text-[11px] sm:text-xs font-bold text-gray-700 mb-1">모임 이름</label>
+                <label className="block text-[11px] sm:text-xs font-bold text-gray-700 mb-1.5">모임 이름</label>
                 <input 
                   type="text" 
                   value={title}
@@ -275,14 +376,21 @@ export default function App() {
                   }}
                   placeholder="예) 강남역 저녁 모임 🍻" 
                   className={`w-full px-3 py-2 sm:py-2.5 bg-gray-50 rounded-lg text-xs sm:text-sm font-medium outline-none transition-all border ${
-                    errors.title ? 'border-red-300 bg-red-50 focus:border-red-400' : 'border-transparent focus:border-gray-900 focus:bg-white'
+                    errors.title ? 'border-red-300 bg-red-50 focus:border-red-400' : 'border-gray-100 focus:border-gray-900 focus:bg-white'
                   }`}
                 />
               </div>
 
               {/* 약속 후보 날짜 범위 */}
               <div>
-                <label className="block text-[11px] sm:text-xs font-bold text-gray-700 mb-1">약속 후보 날짜 범위</label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-[11px] sm:text-xs font-bold text-gray-700">약속 후보 날짜</label>
+                  <div className="flex bg-gray-100 p-0.5 rounded-md">
+                    <button onClick={() => setDateMode('range')} className={`px-2 py-1 rounded text-[9px] sm:text-[10px] font-bold transition-all ${dateMode === 'range' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>시작~종료</button>
+                    <button onClick={() => setDateMode('specific')} className={`px-2 py-1 rounded text-[9px] sm:text-[10px] font-bold transition-all ${dateMode === 'specific' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>특정 날짜 지정</button>
+                  </div>
+                </div>
+                
                 <div className={`bg-gray-50 rounded-lg sm:rounded-xl p-2 sm:p-4 transition-all border ${
                   errors.dates ? 'border-red-300' : 'border-transparent'
                 }`}>
@@ -298,28 +406,33 @@ export default function App() {
                     ))}
                   </div>
                   
-                  <div className="grid grid-cols-7 gap-y-0.5 text-center relative mt-1">
+                  <div className="grid grid-cols-7 gap-y-0.5 text-center relative mt-1 select-none" onTouchMove={handleTouchMove}>
                     {calendarDays.map((dateObj, i) => {
                       if (!dateObj) return <div key={`empty-${i}`} className="py-0.5"></div>;
                       
                       const dateStr = formatDate(dateObj);
                       const isPast = dateStr < todayStr;
-                      const isStart = dateStr === startDate;
-                      const isEnd = dateStr === endDate;
-                      const isBetween = startDate && endDate && dateStr > startDate && dateStr < endDate;
+                      const isStart = dateMode === 'range' && dateStr === startDate;
+                      const isEnd = dateMode === 'range' && dateStr === endDate;
+                      const isBetween = dateMode === 'range' && startDate && endDate && dateStr > startDate && dateStr < endDate;
+                      const isSpecificSelected = dateMode === 'specific' && specificDates.includes(dateStr);
 
                       return (
                         <div key={dateStr} className="relative py-0.5">
-                          {isBetween && <div className="absolute inset-y-0.5 inset-x-0 bg-gray-200"></div>}
-                          {isStart && endDate && <div className="absolute inset-y-0.5 right-0 w-1/2 bg-gray-200"></div>}
-                          {isEnd && startDate && <div className="absolute inset-y-0.5 left-0 w-1/2 bg-gray-200"></div>}
+                          {isBetween && <div className="absolute inset-y-0.5 inset-x-0 bg-gray-200 pointer-events-none"></div>}
+                          {isStart && endDate && <div className="absolute inset-y-0.5 right-0 w-1/2 bg-gray-200 pointer-events-none"></div>}
+                          {isEnd && startDate && <div className="absolute inset-y-0.5 left-0 w-1/2 bg-gray-200 pointer-events-none"></div>}
                           
                           <button
-                            onClick={() => handleHostDateClick(dateObj)}
+                            data-date={dateStr}
                             disabled={isPast}
+                            onMouseDown={() => handleMouseDown(dateObj)}
+                            onMouseEnter={() => handleMouseEnter(dateObj)}
+                            onTouchStart={() => handleMouseDown(dateObj)}
+                            onClick={() => dateMode === 'range' && handleHostDateClick(dateObj)}
                             className={`relative z-10 w-6 h-6 sm:w-8 sm:h-8 mx-auto flex items-center justify-center rounded-full text-[10px] sm:text-xs font-bold transition-all ${
                               isPast ? 'text-gray-300 cursor-not-allowed' :
-                              isStart || isEnd ? 'bg-gray-900 text-white shadow-sm' : 
+                              isStart || isEnd || isSpecificSelected ? 'bg-gray-900 text-white shadow-sm scale-105' : 
                               isBetween ? 'text-gray-900' :
                               'hover:bg-gray-200 text-gray-700 bg-transparent'
                             }`}
@@ -333,23 +446,60 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 투표 마감 기한 */}
+              {/* 투표 마감 기한 (UX 개선) */}
               <div>
-                <label className="block text-[11px] sm:text-xs font-bold text-gray-700 mb-1">투표 마감 기한 (선택)</label>
-                <input 
-                  type="datetime-local" 
-                  value={deadline}
-                  onChange={(e) => setDeadline(e.target.value)}
-                  className="w-full px-3 py-2 sm:py-2.5 bg-gray-50 rounded-lg text-xs sm:text-sm font-medium outline-none transition-all border border-transparent focus:border-gray-900 focus:bg-white"
-                />
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-[11px] sm:text-xs font-bold text-gray-700">투표 마감 (선택)</label>
+                  {deadline && (
+                    <button 
+                      onClick={() => setDeadline('')}
+                      className="text-[9px] sm:text-[10px] text-gray-400 hover:text-red-500 font-bold transition-colors flex items-center gap-0.5"
+                    >
+                      <X className="w-3 h-3" /> 초기화
+                    </button>
+                  )}
+                </div>
+                
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  <button 
+                    onClick={() => handlePresetDeadline(0, true)}
+                    className="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-[10px] sm:text-[11px] font-bold transition-colors"
+                  >
+                    오늘 자정
+                  </button>
+                  <button 
+                    onClick={() => handlePresetDeadline(1, true)}
+                    className="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-[10px] sm:text-[11px] font-bold transition-colors"
+                  >
+                    내일 자정
+                  </button>
+                  <button 
+                    onClick={() => handlePresetDeadline(3, false)}
+                    className="px-2.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-[10px] sm:text-[11px] font-bold transition-colors"
+                  >
+                    3일 뒤
+                  </button>
+                </div>
+
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-400" />
+                  </div>
+                  <input 
+                    type="datetime-local" 
+                    value={deadline}
+                    onChange={(e) => setDeadline(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 sm:py-2.5 bg-gray-50 rounded-lg text-[11px] sm:text-xs font-bold outline-none transition-all border border-gray-100 focus:border-gray-900 focus:bg-white text-gray-800"
+                  />
+                </div>
               </div>
 
               {/* 투표 규칙 옵션 */}
-              <div className="bg-white rounded-lg sm:rounded-xl p-3 border border-gray-200">
-                <h3 className="text-[11px] sm:text-xs font-bold text-gray-900 flex items-center gap-1 mb-2">
+              <div className="bg-gray-50 rounded-lg sm:rounded-xl p-3 border border-gray-100">
+                <h3 className="text-[11px] sm:text-xs font-bold text-gray-900 flex items-center gap-1 mb-2.5">
                   <Settings className="w-3 h-3 text-gray-500" /> 세부 규칙
                 </h3>
-                <div className="space-y-2">
+                <div className="space-y-2.5">
                   <div className="flex items-center gap-2">
                     <input 
                       type="checkbox" 
@@ -358,7 +508,7 @@ export default function App() {
                       onChange={() => setRules(prev => ({...prev, allowedDays: prev.allowedDays.length > 0 ? [] : [1,2,3,4,5]}))}
                       className="w-3.5 h-3.5 rounded border-gray-300 text-gray-900 focus:ring-0 cursor-pointer"
                     />
-                    <label htmlFor="rule1" className="text-[11px] sm:text-xs font-medium text-gray-700 cursor-pointer">특정 요일만 허용</label>
+                    <label htmlFor="rule1" className="text-[11px] sm:text-xs font-bold text-gray-700 cursor-pointer">특정 요일만 허용</label>
                   </div>
                   {rules.allowedDays.length > 0 && (
                     <div className="flex gap-1 pl-5">
@@ -367,7 +517,7 @@ export default function App() {
                           key={day}
                           onClick={() => toggleAllowedDay(idx)}
                           className={`w-6 h-6 rounded-md text-[9px] font-bold transition-all ${
-                            rules.allowedDays.includes(idx) ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-500'
+                            rules.allowedDays.includes(idx) ? 'bg-gray-900 text-white shadow-sm' : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-100'
                           }`}
                         >
                           {day}
@@ -376,18 +526,18 @@ export default function App() {
                     </div>
                   )}
 
-                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-100">
+                  <div className="grid grid-cols-2 gap-2 pt-2.5 border-t border-gray-200">
                     <div className="flex items-center gap-1.5">
                       <input type="checkbox" id="rule2" checked={rules.singleDayOnly} onChange={(e) => setRules({...rules, singleDayOnly: e.target.checked})} className="w-3.5 h-3.5 rounded border-gray-300 text-gray-900 focus:ring-0 cursor-pointer"/>
-                      <label htmlFor="rule2" className="text-[10px] sm:text-[11px] font-medium text-gray-700 cursor-pointer">1인 1일 선택</label>
+                      <label htmlFor="rule2" className="text-[10px] sm:text-[11px] font-bold text-gray-700 cursor-pointer">1인 1일 선택</label>
                     </div>
                     <div className="flex items-center gap-1.5">
                       <input type="checkbox" id="rule3" checked={rules.anonymous} onChange={(e) => setRules({...rules, anonymous: e.target.checked})} className="w-3.5 h-3.5 rounded border-gray-300 text-gray-900 focus:ring-0 cursor-pointer"/>
-                      <label htmlFor="rule3" className="text-[10px] sm:text-[11px] font-medium text-gray-700 cursor-pointer">익명 투표</label>
+                      <label htmlFor="rule3" className="text-[10px] sm:text-[11px] font-bold text-gray-700 cursor-pointer">익명 투표</label>
                     </div>
                     <div className="flex items-center gap-1.5 col-span-2">
                       <input type="checkbox" id="rule4" checked={rules.hideResults} onChange={(e) => setRules({...rules, hideResults: e.target.checked})} className="w-3.5 h-3.5 rounded border-gray-300 text-gray-900 focus:ring-0 cursor-pointer"/>
-                      <label htmlFor="rule4" className="text-[10px] sm:text-[11px] font-medium text-gray-700 cursor-pointer">투표 전 결과 블라인드</label>
+                      <label htmlFor="rule4" className="text-[10px] sm:text-[11px] font-bold text-gray-700 cursor-pointer">투표 전 결과 블라인드</label>
                     </div>
                   </div>
                 </div>
@@ -395,7 +545,7 @@ export default function App() {
 
               <button 
                 onClick={handleCreateLink}
-                className="w-full py-2.5 sm:py-3 rounded-lg font-bold text-xs sm:text-sm text-white bg-gray-900 hover:bg-gray-800 transition-all flex items-center justify-center gap-1.5"
+                className="w-full py-2.5 sm:py-3.5 rounded-lg font-bold text-xs sm:text-sm text-white bg-gray-900 hover:bg-gray-800 transition-all flex items-center justify-center gap-1.5"
               >
                 <Sparkles className="w-3.5 h-3.5" /> 투표 방 만들기
               </button>
@@ -436,13 +586,15 @@ export default function App() {
               <div className="bg-white p-2.5 sm:p-3 rounded-xl shadow-sm border border-gray-200 flex flex-wrap items-center justify-between gap-1.5">
                 <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 min-w-0">
                   <h2 className="text-sm font-bold text-gray-900 truncate max-w-[150px] sm:max-w-[200px]">{title}</h2>
-                  <span className="text-[9px] sm:text-[10px] text-gray-500 whitespace-nowrap bg-gray-100 px-1.5 py-0.5 rounded w-max">{startDate} ~ {endDate}</span>
+                  <span className="text-[9px] sm:text-[10px] text-gray-500 whitespace-nowrap bg-gray-100 px-1.5 py-0.5 rounded w-max">
+                    {dateMode === 'range' ? `${startDate} ~ ${endDate}` : `${specificDates.length}개 날짜 중 선택`}
+                  </span>
                 </div>
                 <div className="flex flex-wrap justify-end gap-1 shrink-0">
-                  {deadline && <span className="text-[9px] bg-orange-50 text-orange-600 px-1 py-0.5 rounded border border-orange-100 flex items-center gap-0.5"><Clock className="w-2.5 h-2.5"/> {formatDateTimeUI(deadline)} 마감</span>}
-                  {rules.singleDayOnly && <span className="text-[9px] bg-red-50 text-red-600 px-1 py-0.5 rounded border border-red-100">1인1일</span>}
-                  {rules.anonymous && <span className="text-[9px] bg-gray-50 text-gray-600 px-1 py-0.5 rounded border border-gray-200">익명</span>}
-                  {rules.hideResults && <span className="text-[9px] bg-blue-50 text-blue-600 px-1 py-0.5 rounded border border-blue-100">블라인드</span>}
+                  {deadline && <span className="text-[9px] font-bold bg-orange-50 text-orange-600 px-1 py-0.5 rounded border border-orange-100 flex items-center gap-0.5"><Clock className="w-2.5 h-2.5"/> {formatDateTimeUI(deadline)} 마감</span>}
+                  {rules.singleDayOnly && <span className="text-[9px] font-bold bg-red-50 text-red-600 px-1 py-0.5 rounded border border-red-100">1인1일</span>}
+                  {rules.anonymous && <span className="text-[9px] font-bold bg-gray-50 text-gray-600 px-1 py-0.5 rounded border border-gray-200">익명</span>}
+                  {rules.hideResults && <span className="text-[9px] font-bold bg-blue-50 text-blue-600 px-1 py-0.5 rounded border border-blue-100">블라인드</span>}
                 </div>
               </div>
 
@@ -475,7 +627,7 @@ export default function App() {
                       value={voterName}
                       onChange={(e) => { setVoterName(e.target.value); if (errors.name) setErrors(prev => ({ ...prev, name: false })); }}
                       placeholder="이름 입력" 
-                      className={`flex-1 px-3 py-1.5 sm:py-2 bg-gray-50 rounded-lg text-xs sm:text-sm font-medium outline-none border ${errors.name ? 'border-red-300 bg-red-50' : 'border-transparent focus:border-gray-900 focus:bg-white'}`}
+                      className={`flex-1 px-3 py-1.5 sm:py-2 bg-gray-50 rounded-lg text-xs sm:text-sm font-bold outline-none border ${errors.name ? 'border-red-300 bg-red-50' : 'border-gray-100 focus:border-gray-900 focus:bg-white'}`}
                     />
                   </div>
 
@@ -502,7 +654,9 @@ export default function App() {
                         if (!dateObj) return <div key={`empty-${i}`} className="h-8 sm:h-10"></div>;
                         
                         const dateStr = formatDate(dateObj);
-                        const isVoteInRange = dateStr >= startDate && dateStr <= endDate;
+                        const isVoteInRange = dateMode === 'range' 
+                          ? (dateStr >= startDate && dateStr <= endDate)
+                          : specificDates.includes(dateStr);
                         const isDayAllowed = rules.allowedDays.length === 0 || rules.allowedDays.includes(dateObj.getDay());
                         const isSelectable = isVoteInRange && isDayAllowed;
                         const isVotedByMe = voterSelections.includes(dateStr);
@@ -529,7 +683,7 @@ export default function App() {
                         );
                       })}
                     </div>
-                    <button onClick={handleSubmitVote} className="w-full mt-2 sm:mt-3 py-2 rounded-lg font-bold text-xs sm:text-sm text-white bg-gray-900 hover:bg-gray-800">이 날짜로 제출</button>
+                    <button onClick={handleSubmitVote} className="w-full mt-2 sm:mt-3 py-2 rounded-lg font-bold text-xs sm:text-sm text-white bg-gray-900 hover:bg-gray-800 transition-colors">이 날짜로 제출</button>
                   </div>
                 </>
               )}
@@ -546,11 +700,11 @@ export default function App() {
                 {shouldHideResults ? (
                   <div className="text-center py-6 bg-gray-50 rounded-lg border border-dashed border-gray-200">
                     <Lock className="w-4 h-4 mx-auto text-gray-400 mb-1" />
-                    <p className="text-[10px] text-gray-500 font-medium">투표 완료 시 공개</p>
+                    <p className="text-[10px] text-gray-500 font-bold">투표 완료 시 공개</p>
                   </div>
                 ) : votes.length === 0 ? (
                   <div className="text-center py-6 bg-gray-50 rounded-lg border border-dashed border-gray-200">
-                    <p className="text-[10px] sm:text-xs text-gray-500">아직 투표 내역이 없습니다.</p>
+                    <p className="text-[10px] sm:text-xs text-gray-500 font-bold">아직 투표 내역이 없습니다.</p>
                   </div>
                 ) : (
                   <div className="space-y-2 max-h-[160px] sm:max-h-[300px] overflow-y-auto pr-1 custom-scrollbar">
@@ -578,7 +732,7 @@ export default function App() {
                             <div className="flex flex-wrap gap-1">
                               {availablePeople.map((person, pIdx) => (
                                 rules.anonymous ? (
-                                  <span key={pIdx} className="text-[8px] font-medium bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">익명</span>
+                                  <span key={pIdx} className="text-[8px] font-bold bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">익명</span>
                                 ) : (
                                   <div key={pIdx} className="group/tooltip relative">
                                     <div className="w-5 h-5 sm:w-6 sm:h-6 flex items-center justify-center bg-white border border-gray-200 rounded-full shadow-sm text-[10px] sm:text-xs cursor-help">{person.emoji}</div>
