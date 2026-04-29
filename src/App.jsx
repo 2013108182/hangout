@@ -435,22 +435,22 @@ export default function App() {
 
         {/* --- STEP 2: 링크 공유 --- */}
         {step === 'link' && (
-          <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-200 max-w-sm mx-auto text-center mt-10">
-            <div className="w-12 h-12 bg-gray-900 text-white rounded-xl flex items-center justify-center mx-auto mb-4">
-              <CheckCircle2 className="w-6 h-6" />
+          <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 max-w-sm mx-auto text-center mt-10">
+            <div className="w-10 h-10 bg-gray-900 text-white rounded-lg flex items-center justify-center mx-auto mb-3">
+              <CheckCircle2 className="w-5 h-5" />
             </div>
-            <h2 className="text-lg font-bold mb-1.5">방 생성 완료!</h2>
-            <p className="text-xs text-gray-500 mb-6">아래 링크를 카톡이나 문자로 공유하세요.</p>
+            <h2 className="text-sm sm:text-base font-bold mb-1">투표 준비 완료!</h2>
+            <p className="text-[11px] text-gray-500 mb-4">링크를 복사해서 공유하세요.</p>
             
-            <div className="flex flex-col gap-2 bg-gray-50 p-2 rounded-xl border border-gray-200 mb-6">
-              <input readOnly value={`${window.location.origin}${window.location.pathname}?id=${meetupId}`} className="bg-transparent w-full outline-none text-gray-700 text-xs font-medium text-center p-1" />
-              <button onClick={handleCopyLink} className="w-full bg-white border border-gray-200 py-2 rounded-lg text-xs font-bold shadow-sm">
-                {copied ? '✅ 복사 완료' : '복사하기'}
+            <div className="flex items-center gap-1.5 bg-gray-50 p-1 pl-2.5 rounded-lg border border-gray-200 mb-4">
+              <input readOnly value={`${window.location.origin}${window.location.pathname}?id=${meetupId}`} className="bg-transparent flex-1 outline-none text-gray-700 text-[11px] font-medium truncate" />
+              <button onClick={handleCopyLink} className="bg-white border border-gray-200 px-2.5 py-1.5 rounded-md text-[10px] font-bold shadow-sm shrink-0">
+                {copied ? '복사됨' : '복사'}
               </button>
             </div>
 
-            <button onClick={() => setStep('vote')} className="w-full py-3 rounded-xl font-bold text-sm text-white bg-gray-900">
-              투표 화면으로 입장
+            <button onClick={() => setStep('vote')} className="w-full py-2.5 rounded-lg font-bold text-xs text-white bg-gray-900">
+              투표 화면 가기
             </button>
           </div>
         )}
