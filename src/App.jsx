@@ -218,7 +218,11 @@ export default function App() {
       setStep('link');
       
       // 화면 새로고침 없이 URL만 업데이트 (?id=xxx)
-      window.history.pushState({}, '', `?id=${newId}`);
+      try {
+        window.history.pushState({}, '', `?id=${newId}`);
+      } catch (historyErr) {
+        console.warn("Canvas 등 제한된 iframe 환경에서는 URL pushState가 제한됩니다. 배포 환경에서는 정상 작동합니다.");
+      }
     } catch (err) {
       console.error(err);
       showToast("방 생성에 실패했습니다.");
@@ -463,6 +467,7 @@ export default function App() {
                   {deadline && <span className="text-[10px] font-bold bg-orange-50 text-orange-600 px-2 py-1 rounded-md border border-orange-100 flex items-center gap-1"><Clock className="w-3 h-3"/> {formatDateTimeUI(deadline)} 마감</span>}
                   {rules.singleDayOnly && <span className="text-[10px] font-bold bg-red-50 text-red-600 px-2 py-1 rounded-md border border-red-100">1인1일</span>}
                   {rules.anonymous && <span className="text-[10px] font-bold bg-gray-50 text-gray-600 px-2 py-1 rounded-md border border-gray-200">익명</span>}
+                  {rules.hideResults && <span className="text-[10px] font-bold bg-blue-50 text-blue-600 px-1 py-0.5 rounded border border-blue-100">블라인드</span>}
                 </div>
               </div>
 
