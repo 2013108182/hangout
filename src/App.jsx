@@ -55,6 +55,8 @@ export default function App() {
   
   // 방장 생성 여부 확인용 Ref (Firestore 콜백 내 참조용)
   const isCreator = useRef(false);
+  // 비밀번호 해제 여부 (stale closure 방지용 ref)
+  const isUnlocked = useRef(false);
 
   // UI 및 에러 상태
   const [copied, setCopied] = useState(false);
@@ -119,13 +121,16 @@ export default function App() {
         setVotes(data.votes || []);
         setDbPassword(data.password || '');
 
-        // 방문자 접근 시 비밀번호 잠금 처리
-        if (data.password && !isCreator.current && inputPassword !== data.password) {
+        // 비밀번호 잠금 - 최초 1회만 평가 (이후 snapshot에서 재잠금 방지)
+        if (data.password && !isCreator.current && !isUnlocked.current) {
           setIsLocked(true);
         }
 
-        // 방장이면 링크 화면 유지, 일반 유저는 투표 화면 진입
-        setStep(isCreator.current ? 'link' : 'vote');
+        // loading 상태일 때만 화면 전환 (이미 link/vote에 있으면 유지)
+        setStep(prev => {
+          if (prev !== 'loading') return prev;
+          return isCreator.current ? 'link' : 'vote';
+        });
         isCreator.current = false;
       } else {
         showToast("존재하지 않는 모임 링크입니다.");
@@ -291,13 +296,19 @@ export default function App() {
     }
   };
 
-  const handleCopyLink = () => {
-    const el = document.createElement('textarea');
-    el.value = `${window.location.origin}${window.location.pathname}?id=${meetupId}`; 
-    document.body.appendChild(el);
-    el.select();
-    document.execCommand('copy');
-    document.body.removeChild(el);
+  const handleCopyLink = async () => {
+    const url = `${window.location.origin}${window.location.pathname}?id=${meetupId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      // 권한 거부 fallback
+      const el = document.createElement('textarea');
+      el.value = url;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -338,9 +349,20 @@ export default function App() {
     }
   };
 
+  // 요일 토글 (세부 규칙에서 사용)
+  const toggleAllowedDay = (idx) => {
+    setRules(prev => ({
+      ...prev,
+      allowedDays: prev.allowedDays.includes(idx)
+        ? prev.allowedDays.filter(d => d !== idx)
+        : [...prev.allowedDays, idx]
+    }));
+  };
+
   // 방 입장 비밀번호 확인
   const handleUnlock = () => {
     if (inputPassword === dbPassword) {
+      isUnlocked.current = true;
       setIsLocked(false);
       showToast('잠금이 해제되었습니다.');
     } else {
