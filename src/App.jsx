@@ -228,7 +228,7 @@ export default function App() {
 
   const handleCopyLink = () => {
     const el = document.createElement('textarea');
-    el.value = window.location.href; // 실제 접속 URL 복사
+    el.value = `${window.location.origin}${window.location.pathname}?id=${meetupId}`; // 사용자 실제 배포 URL을 동적으로 사용
     document.body.appendChild(el);
     el.select();
     document.execCommand('copy');
@@ -439,7 +439,7 @@ export default function App() {
             <p className="text-xs text-gray-500 mb-6">아래 링크를 카톡이나 문자로 공유하세요.</p>
             
             <div className="flex flex-col gap-2 bg-gray-50 p-2 rounded-xl border border-gray-200 mb-6">
-              <input readOnly value={window.location.href} className="bg-transparent w-full outline-none text-gray-700 text-xs font-medium text-center p-1" />
+              <input readOnly value={`${window.location.origin}${window.location.pathname}?id=${meetupId}`} className="bg-transparent w-full outline-none text-gray-700 text-xs font-medium text-center p-1" />
               <button onClick={handleCopyLink} className="w-full bg-white border border-gray-200 py-2 rounded-lg text-xs font-bold shadow-sm">
                 {copied ? '✅ 복사 완료' : '복사하기'}
               </button>
