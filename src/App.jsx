@@ -24,6 +24,15 @@ const auth = app ? getAuth(app) : null;
 const db = app ? getFirestore(app) : null;
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'meetup-app';
 
+// 단방향 암호화(SHA-256) 함수 추가
+const hashPassword = async (password) => {
+  if (!password) return '';
+  const msgUint8 = new TextEncoder().encode(password);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+};
+
 export default function App() {
   // 앱 전역 상태
   const [user, setUser] = useState(null);
@@ -53,7 +62,7 @@ export default function App() {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [voterSelections, setVoterSelections] = useState([]);
   
-  // 방장 생성 여부 확인용 Ref (Firestore 콜백 내 참조용)
+  // 상태 제어용 Ref
   const isCreator = useRef(false);
   // 비밀번호 해제 여부 (stale closure 방지용 ref)
   const isUnlocked = useRef(false);
@@ -64,7 +73,7 @@ export default function App() {
   const [errors, setErrors] = useState({ title: false, dates: false, name: false, selections: false });
   const [toast, setToast] = useState({ visible: false, message: '' });
 
-  const emojis = ['😎', '🥳', '👽', '🤖', '👻', '😻', '🐶', '🦊', '🐻', '🐼', '🐰', '🐯', '🐸', '🦄', '🐙', '🦖'];
+  const emojis = ['😎', '🥳', '👽', '🤖', '👻', '🐱', '🐶', '🦊', '🐻', '🐼', '🐰', '🐯', '🐸', '🦄', '🐙', '🦖', '🐿️', '🐧', '🦁', '🦙'];
   const dayNames = ['일', '월', '화', '수', '목', '금', '토'];
 
   // 초기 인증 처리
@@ -126,11 +135,19 @@ export default function App() {
           setIsLocked(true);
         }
 
-        // loading 상태일 때만 화면 전환 (이미 link/vote에 있으면 유지)
-        setStep(prev => {
-          if (prev !== 'loading') return prev;
-          return isCreator.current ? 'link' : 'vote';
-        });
+        // 기존에 투표한 내역이 있다면 화면에 불러오기 (최초 1회)
+        if (!hasLoadedMyVote.current) {
+          const myPastVote = currentVotes.find(v => v.uid === user.uid);
+          if (myPastVote) {
+            setVoterName(myPastVote.name);
+            setVoterEmoji(myPastVote.emoji);
+            setVoterSelections(myPastVote.available);
+            setHasVoted(true);
+          }
+          hasLoadedMyVote.current = true;
+        }
+
+        setStep(isCreator.current ? 'link' : 'vote');
         isCreator.current = false;
       } else {
         showToast("존재하지 않는 모임 링크입니다.");
@@ -321,14 +338,8 @@ export default function App() {
     let hasError = false;
     const newErrors = { ...errors };
 
-    // 이름 미입력 시 10x10 랜덤 조합 생성
-    let finalName = voterName.trim();
-    if (!finalName) {
-      const prefixes = ['신나는', '행복한', '즐거운', '배고픈', '활기찬', '조용한', '엉뚱한', '피곤한', '용감한', '심심한'];
-      const suffixes = ['고양이', '강아지', '토끼', '다람쥐', '펭귄', '호랑이', '사자', '곰', '여우', '알파카'];
-      finalName = `${prefixes[Math.floor(Math.random() * 10)]} ${suffixes[Math.floor(Math.random() * 10)]}`;
-    }
-    newErrors.name = false;
+    if (!voterName.trim()) { showToast('이름을 입력해주세요.'); newErrors.name = true; hasError = true; }
+    else newErrors.name = false;
 
     if (voterSelections.length === 0) { showToast('가능한 날짜를 선택하세요.'); newErrors.selections = true; hasError = true; }
     else newErrors.selections = false;
@@ -353,7 +364,6 @@ export default function App() {
       const updatedVotes = [...votes.filter(v => v.uid !== user.uid), newVoteData];
       await updateDoc(docRef, { votes: updatedVotes });
       
-      setVoterName(finalName); // 생성된 랜덤 이름을 입력창에도 반영
       setHasVoted(true); 
       showToast('투표가 성공적으로 저장되었습니다.');
     } catch (err) {
@@ -635,7 +645,7 @@ export default function App() {
                         </>
                       )}
                     </div>
-                    <input type="text" value={voterName} onChange={(e) => { setVoterName(e.target.value); if (errors.name) setErrors(prev => ({ ...prev, name: false })); }} placeholder="이름 (미입력 시 랜덤)" 
+                    <input type="text" value={voterName} onChange={(e) => { setVoterName(e.target.value); if (errors.name) setErrors(prev => ({ ...prev, name: false })); }} placeholder="이름 입력" 
                       className={`flex-1 px-3 py-2.5 bg-gray-50 rounded-lg text-sm font-bold outline-none border ${errors.name ? 'border-red-300 bg-red-50' : 'border-gray-100 focus:border-gray-900 focus:bg-white'}`}/>
                   </div>
 
@@ -701,7 +711,7 @@ export default function App() {
                     <p className="text-xs text-gray-500 font-bold">아직 투표 내역이 없습니다.</p>
                   </div>
                 ) : (
-                  <div className="space-y-2.5 max-h-[400px] overflow-y-auto pr-1 custom-scrollbar">
+                  <div className="space-y-2.5">
                     {Object.entries(results).filter(([_, arr]) => arr.length > 0).sort((a, b) => b[1].length - a[1].length).map(([date, availablePeople]) => {
                         const count = availablePeople.length;
                         const isBest = count === maxVotes && count > 0;
@@ -721,8 +731,13 @@ export default function App() {
                               {availablePeople.map((person, pIdx) => rules.anonymous ? (
                                   <span key={pIdx} className="text-[9px] font-bold bg-gray-100 text-gray-600 px-2 py-1 rounded-md">익명</span>
                                 ) : (
-                                  <div key={pIdx} className="group/tooltip relative">
+                                  // 💡 hover 시 z-index 최상위 설정 및 위치 중앙 조정
+                                  <div key={pIdx} className="group/tooltip relative flex items-center justify-center hover:z-50">
                                     <div className="w-7 h-7 flex items-center justify-center bg-white border border-gray-200 rounded-full shadow-sm text-xs cursor-help">{person.emoji}</div>
+                                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tooltip:block bg-gray-900 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg shadow-xl z-[100] pointer-events-none w-max max-w-[90px] whitespace-normal break-all text-center leading-snug">
+                                      {person.name}
+                                      <div className="absolute top-full left-1/2 -translate-x-1/2 border-[4px] border-transparent border-t-gray-900"></div>
+                                    </div>
                                   </div>
                                 ))}
                             </div>
