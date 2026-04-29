@@ -24,15 +24,6 @@ const auth = app ? getAuth(app) : null;
 const db = app ? getFirestore(app) : null;
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'meetup-app';
 
-// 단방향 암호화(SHA-256) 함수 추가
-const hashPassword = async (password) => {
-  if (!password) return '';
-  const msgUint8 = new TextEncoder().encode(password);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-};
-
 export default function App() {
   // 앱 전역 상태
   const [user, setUser] = useState(null);
@@ -62,10 +53,10 @@ export default function App() {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [voterSelections, setVoterSelections] = useState([]);
   
-  // 상태 제어용 Ref
+  // 방장 생성 여부 확인용 Ref (Firestore 콜백 내 참조용)
   const isCreator = useRef(false);
-  const hasLoadedMyVote = useRef(false); // 본인의 기존 투표 내역을 불러왔는지 확인
-  const isUnlockedRef = useRef(false); // 실시간 구독 중 잠금 재설정 방지용
+  // 비밀번호 해제 여부 (stale closure 방지용 ref)
+  const isUnlocked = useRef(false);
 
   // UI 및 에러 상태
   const [copied, setCopied] = useState(false);
@@ -97,7 +88,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // URL 쿼리 파라 파싱
+  // URL 쿼리 파라미터 파싱
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const id = params.get('id');
@@ -114,6 +105,7 @@ export default function App() {
 
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetups', meetupId);
     
+    // 방장이 아닌 경우 로딩 화면 표시
     if (!isCreator.current) setStep('loading');
 
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
@@ -126,29 +118,19 @@ export default function App() {
         setDateMode(data.dateMode || 'range');
         setSpecificDates(data.specificDates || []);
         setRules(data.rules || { allowedDays: [], singleDayOnly: false, anonymous: false, hideResults: false });
-        
-        const currentVotes = data.votes || [];
-        setVotes(currentVotes);
-        setDbPassword(data.password || ''); // 암호화된 비밀번호 저장
+        setVotes(data.votes || []);
+        setDbPassword(data.password || '');
 
-        // 방문자 접근 시 잠금 처리 (이미 해제한 경우는 제외)
-        if (data.password && !isCreator.current && !isUnlockedRef.current) {
+        // 비밀번호 잠금 - 최초 1회만 평가 (이후 snapshot에서 재잠금 방지)
+        if (data.password && !isCreator.current && !isUnlocked.current) {
           setIsLocked(true);
         }
 
-        // 기존에 투표한 내역이 있다면 화면에 불러오기 (최초 1회)
-        if (!hasLoadedMyVote.current) {
-          const myPastVote = currentVotes.find(v => v.uid === user.uid);
-          if (myPastVote) {
-            setVoterName(myPastVote.name);
-            setVoterEmoji(myPastVote.emoji);
-            setVoterSelections(myPastVote.available);
-            setHasVoted(true);
-          }
-          hasLoadedMyVote.current = true;
-        }
-
-        setStep(isCreator.current ? 'link' : 'vote');
+        // loading 상태일 때만 화면 전환 (이미 link/vote에 있으면 유지)
+        setStep(prev => {
+          if (prev !== 'loading') return prev;
+          return isCreator.current ? 'link' : 'vote';
+        });
         isCreator.current = false;
       } else {
         showToast("존재하지 않는 모임 링크입니다.");
@@ -235,6 +217,7 @@ export default function App() {
   const handleCreateLink = async () => {
     if (!db) return showToast("DB 설정이 필요합니다.");
 
+    // 사용자 인증 재확인
     let currentUser = user;
     if (!currentUser) {
       if (!auth) return showToast("Firebase Auth가 초기화되지 않았습니다.");
@@ -246,6 +229,7 @@ export default function App() {
       }
     }
     
+    // 입력값 유효성 검사
     let hasError = false;
     const newErrors = { ...errors };
 
@@ -272,21 +256,14 @@ export default function App() {
     setErrors(newErrors);
     if (hasError) return;
 
+    // 데이터 저장
     try {
       setStep('loading');
       const newId = crypto.randomUUID().split('-')[0];
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetups', newId);
 
-      // 구독 콜백 내 화면 전환 방지를 위한 방장 플래그 설정
+      // 구독 콜백 내 화면 전환 방지를 위한 방장 플래그
       isCreator.current = true;
-      isUnlockedRef.current = true; // 방장은 비밀번호 입력 패스
-
-      // 비밀번호 암호화 (SHA-256)
-      const hashedPassword = await hashPassword(roomPassword.trim());
-
-      // 30일 뒤 만료 시간 계산
-      const now = new Date();
-      const expireDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
       await setDoc(docRef, {
         title, 
@@ -296,11 +273,10 @@ export default function App() {
         dateMode, 
         specificDates, 
         rules, 
-        password: hashedPassword, // 암호화된 비밀번호로 저장
+        password: roomPassword.trim(),
         votes: [], 
         host: currentUser.uid, 
-        createdAt: now.toISOString(),
-        expiresAt: expireDate // 자동 삭제(TTL)를 위한 시간 데이터 추가
+        createdAt: new Date().toISOString()
       });
 
       setMeetupId(newId);
@@ -320,13 +296,19 @@ export default function App() {
     }
   };
 
-  const handleCopyLink = () => {
-    const el = document.createElement('textarea');
-    el.value = `${window.location.origin}${window.location.pathname}?id=${meetupId}`; 
-    document.body.appendChild(el);
-    el.select();
-    document.execCommand('copy');
-    document.body.removeChild(el);
+  const handleCopyLink = async () => {
+    const url = `${window.location.origin}${window.location.pathname}?id=${meetupId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      // 권한 거부 fallback
+      const el = document.createElement('textarea');
+      el.value = url;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -339,14 +321,20 @@ export default function App() {
     let hasError = false;
     const newErrors = { ...errors };
 
-    if (!voterName.trim()) { showToast('이름을 입력해주세요.'); newErrors.name = true; hasError = true; }
-    else newErrors.name = false;
+    // 이름 미입력 시 10x10 랜덤 조합 생성
+    let finalName = voterName.trim();
+    if (!finalName) {
+      const prefixes = ['신나는', '행복한', '즐거운', '배고픈', '활기찬', '조용한', '엉뚱한', '피곤한', '용감한', '심심한'];
+      const suffixes = ['고양이', '강아지', '토끼', '다람쥐', '펭귄', '호랑이', '사자', '곰', '여우', '알파카'];
+      finalName = `${prefixes[Math.floor(Math.random() * 10)]} ${suffixes[Math.floor(Math.random() * 10)]}`;
+    }
+    newErrors.name = false;
 
-    if (voterSelections.length === 0) { if(!hasError) showToast('가능한 날짜를 선택하세요.'); newErrors.selections = true; hasError = true; }
+    if (voterSelections.length === 0) { showToast('가능한 날짜를 선택하세요.'); newErrors.selections = true; hasError = true; }
     else newErrors.selections = false;
 
     // 이름 중복 검사 (다른 기기에서 이미 사용 중인 이름인지 확인)
-    const isNameTaken = votes.some(v => v.name === voterName.trim() && v.uid !== user.uid);
+    const isNameTaken = votes.some(v => v.name === finalName && v.uid !== user.uid);
     if (isNameTaken) {
       showToast('이미 사용 중인 이름입니다. 다른 이름을 입력해주세요.');
       newErrors.name = true;
@@ -359,12 +347,13 @@ export default function App() {
 
     try {
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetups', meetupId);
-      const newVoteData = { name: voterName.trim(), emoji: voterEmoji, available: voterSelections, uid: user.uid };
+      const newVoteData = { name: finalName, emoji: voterEmoji, available: voterSelections, uid: user.uid };
       
       // 기기 식별자(UID)를 기준으로 기존 본인의 투표를 갱신
       const updatedVotes = [...votes.filter(v => v.uid !== user.uid), newVoteData];
       await updateDoc(docRef, { votes: updatedVotes });
       
+      setVoterName(finalName); // 생성된 랜덤 이름을 입력창에도 반영
       setHasVoted(true); 
       showToast('투표가 성공적으로 저장되었습니다.');
     } catch (err) {
@@ -373,16 +362,24 @@ export default function App() {
     }
   };
 
-  // 방 입장 비밀번호 검증 (사용자 입력값을 암호화하여 원본과 비교)
-  const handleUnlock = async () => {
-    const hashedInput = await hashPassword(inputPassword);
-    
-    if (hashedInput === dbPassword) {
-      isUnlockedRef.current = true;
+  // 요일 토글 (세부 규칙에서 사용)
+  const toggleAllowedDay = (idx) => {
+    setRules(prev => ({
+      ...prev,
+      allowedDays: prev.allowedDays.includes(idx)
+        ? prev.allowedDays.filter(d => d !== idx)
+        : [...prev.allowedDays, idx]
+    }));
+  };
+
+  // 방 입장 비밀번호 확인
+  const handleUnlock = () => {
+    if (inputPassword === dbPassword) {
+      isUnlocked.current = true;
       setIsLocked(false);
       showToast('잠금이 해제되었습니다.');
     } else {
-      showToast('비밀번호가 일치하지 않습니다.');
+      showToast('비밀번호가 틀렸습니다.');
     }
   };
 
@@ -449,7 +446,7 @@ export default function App() {
             <div className="space-y-6">
               <div>
                 <label className="block text-xs font-bold text-gray-700 mb-1.5">모임 이름</label>
-                <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="예) 회식" 
+                <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="예) 강남역 저녁 모임 🍻" 
                   className={`w-full px-4 py-3 bg-gray-50 rounded-xl text-sm font-medium outline-none border ${errors.title ? 'border-red-300 bg-red-50' : 'border-transparent focus:border-gray-900 focus:bg-white'}`}/>
               </div>
 
@@ -458,7 +455,7 @@ export default function App() {
                   <label className="block text-xs font-bold text-gray-700">약속 후보 날짜</label>
                   <div className="flex bg-gray-100 p-0.5 rounded-lg">
                     <button onClick={() => setDateMode('range')} className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-all ${dateMode === 'range' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>시작~종료</button>
-                    <button onClick={() => setDateMode('specific')} className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-all ${dateMode === 'specific' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>개별 선택</button>
+                    <button onClick={() => setDateMode('specific')} className={`px-2.5 py-1 rounded-md text-[10px] font-bold transition-all ${dateMode === 'specific' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>콕콕 찍기</button>
                   </div>
                 </div>
                 
@@ -638,7 +635,7 @@ export default function App() {
                         </>
                       )}
                     </div>
-                    <input type="text" value={voterName} onChange={(e) => { setVoterName(e.target.value); if (errors.name) setErrors(prev => ({ ...prev, name: false })); }} placeholder="이름 입력" 
+                    <input type="text" value={voterName} onChange={(e) => { setVoterName(e.target.value); if (errors.name) setErrors(prev => ({ ...prev, name: false })); }} placeholder="이름 (미입력 시 랜덤)" 
                       className={`flex-1 px-3 py-2.5 bg-gray-50 rounded-lg text-sm font-bold outline-none border ${errors.name ? 'border-red-300 bg-red-50' : 'border-gray-100 focus:border-gray-900 focus:bg-white'}`}/>
                   </div>
 
