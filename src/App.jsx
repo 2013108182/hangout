@@ -77,6 +77,9 @@ export default function App() {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [voterSelections, setVoterSelections] = useState([]);
   
+  // 💡 랜덤 닉네임 임시 저장용 상태 (placeholder 표시용)
+  const [randomName, setRandomName] = useState('');
+
   // 상태 제어용 Ref
   const isCreator = useRef(false);
   const hasLoadedMyVote = useRef(false); // 본인의 기존 투표 내역을 불러왔는지 확인
@@ -160,10 +163,10 @@ export default function App() {
             setVoterSelections(myPastVote.available);
             setHasVoted(true);
           } else {
-            // 랜덤 이름/이모지 조합 생성
+            // 랜덤 이름/이모지 조합 생성 (입력값 대신 임시 상태에만 저장)
             const randomPrefix = PREFIXES[Math.floor(Math.random() * PREFIXES.length)];
             const randomProfile = RANDOM_PROFILES[Math.floor(Math.random() * RANDOM_PROFILES.length)];
-            setVoterName(`${randomPrefix} ${randomProfile.suffix}`);
+            setRandomName(`${randomPrefix} ${randomProfile.suffix}`);
             setVoterEmoji(randomProfile.emoji);
           }
           hasLoadedMyVote.current = true;
@@ -366,8 +369,8 @@ export default function App() {
     let hasError = false;
     const newErrors = { ...errors };
 
-    // 이름 필수 검증 (비워두면 막기)
-    const finalName = voterName.trim();
+    // 💡 입력된 이름이 없으면 placeholder에 표시된 랜덤 닉네임을 사용
+    const finalName = voterName.trim() || randomName;
     if (!finalName) { showToast('이름을 입력해주세요.'); newErrors.name = true; hasError = true; }
     else newErrors.name = false;
 
@@ -394,6 +397,7 @@ export default function App() {
       const updatedVotes = [...votes.filter(v => v.uid !== user.uid), newVoteData];
       await updateDoc(docRef, { votes: updatedVotes });
       
+      setVoterName(finalName); // 제출을 완료하면 확정된 이름을 텍스트창에 채워줌
       setHasVoted(true); 
       showToast('투표가 성공적으로 저장되었습니다.');
     } catch (err) {
@@ -667,9 +671,9 @@ export default function App() {
                         </>
                       )}
                     </div>
-                    {/* 💡 미리 입력된 랜덤 닉네임 */}
-                    <input type="text" value={voterName} onChange={(e) => { setVoterName(e.target.value); if (errors.name) setErrors(prev => ({ ...prev, name: false })); }} placeholder="이름 입력" 
-                      className={`flex-1 px-3 py-2.5 bg-gray-50 rounded-lg text-sm font-bold outline-none border ${errors.name ? 'border-red-300 bg-red-50' : 'border-gray-100 focus:border-gray-900 focus:bg-white'}`}/>
+                    {/* 💡 placeholder를 활용한 랜덤 닉네임 노출 */}
+                    <input type="text" value={voterName} onChange={(e) => { setVoterName(e.target.value); if (errors.name) setErrors(prev => ({ ...prev, name: false })); }} placeholder={randomName || "이름 입력"} 
+                      className={`flex-1 px-3 py-2.5 bg-gray-50 rounded-lg text-sm font-bold outline-none border ${errors.name ? 'border-red-300 bg-red-50' : 'border-gray-100 focus:border-gray-900 focus:bg-white placeholder:text-gray-400'}`}/>
                   </div>
 
                   <div className={`bg-white p-4 rounded-xl shadow-sm border ${errors.selections ? 'border-red-300' : 'border-gray-200'}`}>
@@ -734,7 +738,7 @@ export default function App() {
                     <p className="text-xs text-gray-500 font-bold">아직 투표 내역이 없습니다.</p>
                   </div>
                 ) : (
-                  <div className="space-y-2.5 max-h-[400px] overflow-y-auto pr-1 custom-scrollbar">
+                  <div className="space-y-2.5">
                     {Object.entries(results).filter(([_, arr]) => arr.length > 0).sort((a, b) => b[1].length - a[1].length).map(([date, availablePeople]) => {
                         const count = availablePeople.length;
                         const isBest = count === maxVotes && count > 0;
@@ -754,7 +758,26 @@ export default function App() {
                               {availablePeople.map((person, pIdx) => rules.anonymous ? (
                                   <span key={pIdx} className="text-[9px] font-bold bg-gray-100 text-gray-600 px-2 py-1 rounded-md">익명</span>
                                 ) : (
-                                  // 💡 마우스 오버 툴팁이 추가된 부분
-                                  <div key={pIdx} className="group/tooltip relative flex items-center justify-center">
+                                  // 💡 hover 시 z-index 최상위 설정 및 위치 중앙 조정
+                                  <div key={pIdx} className="group/tooltip relative flex items-center justify-center hover:z-50">
                                     <div className="w-7 h-7 flex items-center justify-center bg-white border border-gray-200 rounded-full shadow-sm text-xs cursor-help">{person.emoji}</div>
-                                    <div className="absolute bottom-full mb-1 hidden group-hover/tooltip:block bg-gray-900 text-white text-[10px] px-2 py-1 rounded shadow-lg whitespace-nowrap z-10
+                                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tooltip:block bg-gray-900 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-lg shadow-xl z-[100] pointer-events-none w-max max-w-[90px] whitespace-normal break-all text-center leading-snug">
+                                      {person.name}
+                                      <div className="absolute top-full left-1/2 -translate-x-1/2 border-[4px] border-transparent border-t-gray-900"></div>
+                                    </div>
+                                  </div>
+                                ))}
+                            </div>
+                          </div>
+                        )
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
