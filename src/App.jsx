@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Calendar, Users, ChevronLeft, ChevronRight, Copy, Check, CheckCircle2, Settings, Smile, AlertCircle, Sparkles, Lock, Clock, X, Loader2 } from 'lucide-react';
 
 // Firebase imports
@@ -47,6 +47,9 @@ export default function App() {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [voterSelections, setVoterSelections] = useState([]);
   
+  // 방장 여부 추적 (stale closure 없이 onSnapshot에서 안전하게 참조)
+  const isCreator = useRef(false);
+
   // UI 상태
   const [copied, setCopied] = useState(false);
   const [hasVoted, setHasVoted] = useState(false);
@@ -91,9 +94,10 @@ export default function App() {
   // --- 2. 실시간 데이터베이스 연동 ---
   useEffect(() => {
     if (!user || !meetupId || !db) return;
-    
+
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetups', meetupId);
-    setStep('loading');
+    // 방장(isCreator)이 아닐 때만 로딩 화면으로 전환 (방장은 link 화면을 유지해야 함)
+    if (!isCreator.current) setStep('loading');
 
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -106,7 +110,9 @@ export default function App() {
         setSpecificDates(data.specificDates || []);
         setRules(data.rules || { allowedDays: [], singleDayOnly: false, anonymous: false, hideResults: false });
         setVotes(data.votes || []);
-        setStep(step === 'link' ? 'link' : 'vote'); // 방금 만든 사람은 link 화면 유지, 아니면 vote로 이동
+        // ref로 방장 여부 확인 (stale closure 문제 없음)
+        setStep(isCreator.current ? 'link' : 'vote');
+        isCreator.current = false;
       } else {
         showToast("존재하지 않는 모임 링크입니다.");
         setStep('create');
@@ -189,7 +195,18 @@ export default function App() {
   // 💡 방 생성 로직 (DB 저장 & URL 파라미터 변경)
   const handleCreateLink = async () => {
     if (!db) return showToast("DB 설정이 필요합니다. 상단의 myFirebaseConfig를 입력해주세요!");
-    if (!user) return showToast("서버 연결 중입니다. 잠시만 기다려주세요.");
+
+    // user가 없으면 익명 로그인 재시도 (페이지 첫 로드 시 auth가 늦게 완료될 수 있음)
+    let currentUser = user;
+    if (!currentUser) {
+      if (!auth) return showToast("Firebase Auth가 초기화되지 않았습니다.");
+      try {
+        const cred = await signInAnonymously(auth);
+        currentUser = cred.user;
+      } catch (e) {
+        return showToast("Firebase Console → Authentication에서 '익명' 로그인을 활성화해주세요.");
+      }
+    }
     
     let hasError = false;
     const newErrors = { ...errors };
@@ -209,14 +226,16 @@ export default function App() {
       setStep('loading');
       const newId = crypto.randomUUID().split('-')[0]; // 고유 짧은 ID 생성
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetups', newId);
-      
+
+      // onSnapshot이 트리거되기 전에 방장 플래그 설정
+      isCreator.current = true;
+
       await setDoc(docRef, {
-        title, startDate, endDate, deadline, dateMode, specificDates, rules, votes: [], host: user.uid, createdAt: new Date().toISOString()
+        title, startDate, endDate, deadline, dateMode, specificDates, rules, votes: [], host: currentUser.uid, createdAt: new Date().toISOString()
       });
 
       setMeetupId(newId);
-      setStep('link');
-      
+
       // 화면 새로고침 없이 URL만 업데이트 (?id=xxx)
       try {
         window.history.pushState({}, '', `?id=${newId}`);
@@ -224,8 +243,9 @@ export default function App() {
         console.warn("Canvas 등 제한된 iframe 환경에서는 URL pushState가 제한됩니다. 배포 환경에서는 정상 작동합니다.");
       }
     } catch (err) {
+      isCreator.current = false;
       console.error(err);
-      showToast("방 생성에 실패했습니다.");
+      showToast("방 생성에 실패했습니다. Firestore 보안 규칙을 확인해주세요.");
       setStep('create');
     }
   };
