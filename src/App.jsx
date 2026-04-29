@@ -24,6 +24,15 @@ const auth = app ? getAuth(app) : null;
 const db = app ? getFirestore(app) : null;
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'meetup-app';
 
+// 단방향 암호화(SHA-256) 함수 추가
+const hashPassword = async (password) => {
+  if (!password) return '';
+  const msgUint8 = new TextEncoder().encode(password);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+};
+
 export default function App() {
   // 앱 전역 상태
   const [user, setUser] = useState(null);
@@ -56,6 +65,7 @@ export default function App() {
   // 상태 제어용 Ref
   const isCreator = useRef(false);
   const hasLoadedMyVote = useRef(false); // 본인의 기존 투표 내역을 불러왔는지 확인
+  const isUnlockedRef = useRef(false); // 실시간 구독 중 잠금 재설정 방지용
 
   // UI 및 에러 상태
   const [copied, setCopied] = useState(false);
@@ -87,7 +97,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // URL 쿼리 파라미터 파싱
+  // URL 쿼리 파라 파싱
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const id = params.get('id');
@@ -119,10 +129,10 @@ export default function App() {
         
         const currentVotes = data.votes || [];
         setVotes(currentVotes);
-        setDbPassword(data.password || '');
+        setDbPassword(data.password || ''); // 암호화된 비밀번호 저장
 
-        // 방문자 접근 시 비밀번호 잠금 처리
-        if (data.password && !isCreator.current && inputPassword !== data.password) {
+        // 방문자 접근 시 잠금 처리 (이미 해제한 경우는 제외)
+        if (data.password && !isCreator.current && !isUnlockedRef.current) {
           setIsLocked(true);
         }
 
@@ -267,8 +277,12 @@ export default function App() {
       const newId = crypto.randomUUID().split('-')[0];
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetups', newId);
 
-      // 구독 콜백 내 화면 전환 방지를 위한 방장 플래그
+      // 구독 콜백 내 화면 전환 방지를 위한 방장 플래그 설정
       isCreator.current = true;
+      isUnlockedRef.current = true; // 방장은 비밀번호 입력 패스
+
+      // 비밀번호 암호화 (SHA-256)
+      const hashedPassword = await hashPassword(roomPassword.trim());
 
       // 30일 뒤 만료 시간 계산
       const now = new Date();
@@ -282,7 +296,7 @@ export default function App() {
         dateMode, 
         specificDates, 
         rules, 
-        password: roomPassword.trim(),
+        password: hashedPassword, // 암호화된 비밀번호로 저장
         votes: [], 
         host: currentUser.uid, 
         createdAt: now.toISOString(),
@@ -359,9 +373,12 @@ export default function App() {
     }
   };
 
-  // 방 입장 비밀번호 확인
-  const handleUnlock = () => {
-    if (inputPassword === dbPassword) {
+  // 방 입장 비밀번호 검증 (사용자 입력값을 암호화하여 원본과 비교)
+  const handleUnlock = async () => {
+    const hashedInput = await hashPassword(inputPassword);
+    
+    if (hashedInput === dbPassword) {
+      isUnlockedRef.current = true;
       setIsLocked(false);
       showToast('잠금이 해제되었습니다.');
     } else {
