@@ -24,6 +24,21 @@ const auth = app ? getAuth(app) : null;
 const db = app ? getFirestore(app) : null;
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'meetup-app';
 
+// 💡 랜덤 닉네임 생성용 데이터
+const PREFIXES = ['신나는', '행복한', '즐거운', '배고픈', '활기찬', '조용한', '엉뚱한', '피곤한', '용감한', '심심한'];
+const RANDOM_PROFILES = [
+  { suffix: '고양이', emoji: '🐱' },
+  { suffix: '강아지', emoji: '🐶' },
+  { suffix: '토끼', emoji: '🐰' },
+  { suffix: '다람쥐', emoji: '🐿️' },
+  { suffix: '펭귄', emoji: '🐧' },
+  { suffix: '호랑이', emoji: '🐯' },
+  { suffix: '사자', emoji: '🦁' },
+  { suffix: '곰', emoji: '🐻' },
+  { suffix: '여우', emoji: '🦊' },
+  { suffix: '알파카', emoji: '🦙' }
+];
+
 // 단방향 암호화(SHA-256) 함수 추가
 const hashPassword = async (password) => {
   if (!password) return '';
@@ -62,10 +77,13 @@ export default function App() {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [voterSelections, setVoterSelections] = useState([]);
   
+  // 💡 랜덤 닉네임 임시 저장용 상태 (placeholder 표시용)
+  const [randomName, setRandomName] = useState('');
+
   // 상태 제어용 Ref
   const isCreator = useRef(false);
-  // 비밀번호 해제 여부 (stale closure 방지용 ref)
-  const isUnlocked = useRef(false);
+  const hasLoadedMyVote = useRef(false); // 본인의 기존 투표 내역을 불러왔는지 확인
+  const isUnlockedRef = useRef(false); // 실시간 구독 중 잠금 재설정 방지용
 
   // UI 및 에러 상태
   const [copied, setCopied] = useState(false);
@@ -114,7 +132,6 @@ export default function App() {
 
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetups', meetupId);
     
-    // 방장이 아닌 경우 로딩 화면 표시
     if (!isCreator.current) setStep('loading');
 
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
@@ -127,15 +144,17 @@ export default function App() {
         setDateMode(data.dateMode || 'range');
         setSpecificDates(data.specificDates || []);
         setRules(data.rules || { allowedDays: [], singleDayOnly: false, anonymous: false, hideResults: false });
-        setVotes(data.votes || []);
-        setDbPassword(data.password || '');
+        
+        const currentVotes = data.votes || [];
+        setVotes(currentVotes);
+        setDbPassword(data.password || ''); // 암호화된 비밀번호 저장
 
-        // 비밀번호 잠금 - 최초 1회만 평가 (이후 snapshot에서 재잠금 방지)
-        if (data.password && !isCreator.current && !isUnlocked.current) {
+        // 방문자 접근 시 잠금 처리 (이미 해제한 경우는 제외)
+        if (data.password && !isCreator.current && !isUnlockedRef.current) {
           setIsLocked(true);
         }
 
-        // 기존에 투표한 내역이 있다면 화면에 불러오기 (최초 1회)
+        // 기존에 투표한 내역이 있다면 화면에 불러오고, 없다면 💡 랜덤 닉네임 생성
         if (!hasLoadedMyVote.current) {
           const myPastVote = currentVotes.find(v => v.uid === user.uid);
           if (myPastVote) {
@@ -143,6 +162,12 @@ export default function App() {
             setVoterEmoji(myPastVote.emoji);
             setVoterSelections(myPastVote.available);
             setHasVoted(true);
+          } else {
+            // 랜덤 이름/이모지 조합 생성 (입력값 대신 임시 상태에만 저장)
+            const randomPrefix = PREFIXES[Math.floor(Math.random() * PREFIXES.length)];
+            const randomProfile = RANDOM_PROFILES[Math.floor(Math.random() * RANDOM_PROFILES.length)];
+            setRandomName(`${randomPrefix} ${randomProfile.suffix}`);
+            setVoterEmoji(randomProfile.emoji);
           }
           hasLoadedMyVote.current = true;
         }
@@ -234,7 +259,6 @@ export default function App() {
   const handleCreateLink = async () => {
     if (!db) return showToast("DB 설정이 필요합니다.");
 
-    // 사용자 인증 재확인
     let currentUser = user;
     if (!currentUser) {
       if (!auth) return showToast("Firebase Auth가 초기화되지 않았습니다.");
@@ -246,7 +270,6 @@ export default function App() {
       }
     }
     
-    // 입력값 유효성 검사
     let hasError = false;
     const newErrors = { ...errors };
 
@@ -273,14 +296,21 @@ export default function App() {
     setErrors(newErrors);
     if (hasError) return;
 
-    // 데이터 저장
     try {
       setStep('loading');
       const newId = crypto.randomUUID().split('-')[0];
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'meetups', newId);
 
-      // 구독 콜백 내 화면 전환 방지를 위한 방장 플래그
+      // 구독 콜백 내 화면 전환 방지를 위한 방장 플래그 설정
       isCreator.current = true;
+      isUnlockedRef.current = true; // 방장은 비밀번호 입력 패스
+
+      // 비밀번호 암호화 (SHA-256)
+      const hashedPassword = await hashPassword(roomPassword.trim());
+
+      // 30일 뒤 만료 시간 계산
+      const now = new Date();
+      const expireDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
       await setDoc(docRef, {
         title, 
@@ -290,10 +320,11 @@ export default function App() {
         dateMode, 
         specificDates, 
         rules, 
-        password: roomPassword.trim(),
+        password: hashedPassword, // 암호화된 비밀번호로 저장
         votes: [], 
         host: currentUser.uid, 
-        createdAt: new Date().toISOString()
+        createdAt: now.toISOString(),
+        expiresAt: expireDate // 자동 삭제(TTL)를 위한 시간 데이터 추가
       });
 
       setMeetupId(newId);
@@ -338,10 +369,12 @@ export default function App() {
     let hasError = false;
     const newErrors = { ...errors };
 
-    if (!voterName.trim()) { showToast('이름을 입력해주세요.'); newErrors.name = true; hasError = true; }
+    // 💡 입력된 이름이 없으면 placeholder에 표시된 랜덤 닉네임을 사용
+    const finalName = voterName.trim() || randomName;
+    if (!finalName) { showToast('이름을 입력해주세요.'); newErrors.name = true; hasError = true; }
     else newErrors.name = false;
 
-    if (voterSelections.length === 0) { showToast('가능한 날짜를 선택하세요.'); newErrors.selections = true; hasError = true; }
+    if (voterSelections.length === 0) { if(!hasError) showToast('가능한 날짜를 선택하세요.'); newErrors.selections = true; hasError = true; }
     else newErrors.selections = false;
 
     // 이름 중복 검사 (다른 기기에서 이미 사용 중인 이름인지 확인)
@@ -364,6 +397,7 @@ export default function App() {
       const updatedVotes = [...votes.filter(v => v.uid !== user.uid), newVoteData];
       await updateDoc(docRef, { votes: updatedVotes });
       
+      setVoterName(finalName); // 제출을 완료하면 확정된 이름을 텍스트창에 채워줌
       setHasVoted(true); 
       showToast('투표가 성공적으로 저장되었습니다.');
     } catch (err) {
@@ -372,24 +406,16 @@ export default function App() {
     }
   };
 
-  // 요일 토글 (세부 규칙에서 사용)
-  const toggleAllowedDay = (idx) => {
-    setRules(prev => ({
-      ...prev,
-      allowedDays: prev.allowedDays.includes(idx)
-        ? prev.allowedDays.filter(d => d !== idx)
-        : [...prev.allowedDays, idx]
-    }));
-  };
-
-  // 방 입장 비밀번호 확인
-  const handleUnlock = () => {
-    if (inputPassword === dbPassword) {
-      isUnlocked.current = true;
+  // 방 입장 비밀번호 검증 (사용자 입력값을 암호화하여 원본과 비교)
+  const handleUnlock = async () => {
+    const hashedInput = await hashPassword(inputPassword);
+    
+    if (hashedInput === dbPassword) {
+      isUnlockedRef.current = true;
       setIsLocked(false);
       showToast('잠금이 해제되었습니다.');
     } else {
-      showToast('비밀번호가 틀렸습니다.');
+      showToast('비밀번호가 일치하지 않습니다.');
     }
   };
 
@@ -645,8 +671,9 @@ export default function App() {
                         </>
                       )}
                     </div>
-                    <input type="text" value={voterName} onChange={(e) => { setVoterName(e.target.value); if (errors.name) setErrors(prev => ({ ...prev, name: false })); }} placeholder="이름 입력" 
-                      className={`flex-1 px-3 py-2.5 bg-gray-50 rounded-lg text-sm font-bold outline-none border ${errors.name ? 'border-red-300 bg-red-50' : 'border-gray-100 focus:border-gray-900 focus:bg-white'}`}/>
+                    {/* 💡 placeholder를 활용한 랜덤 닉네임 노출 */}
+                    <input type="text" value={voterName} onChange={(e) => { setVoterName(e.target.value); if (errors.name) setErrors(prev => ({ ...prev, name: false })); }} placeholder={randomName || "이름 입력"} 
+                      className={`flex-1 px-3 py-2.5 bg-gray-50 rounded-lg text-sm font-bold outline-none border ${errors.name ? 'border-red-300 bg-red-50' : 'border-gray-100 focus:border-gray-900 focus:bg-white placeholder:text-gray-400'}`}/>
                   </div>
 
                   <div className={`bg-white p-4 rounded-xl shadow-sm border ${errors.selections ? 'border-red-300' : 'border-gray-200'}`}>
